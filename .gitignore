@@ -1,0 +1,7 @@
+.zig-cache
+.direnv
+zig-out
+zig-pkg
+progsys.db*
+progsys.pid
+result

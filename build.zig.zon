@@ -1,0 +1,17 @@
+.{
+    .name = .zigweb,
+    .version = "0.0.1",
+    .dependencies = .{
+        .zqlite = .{
+            .url = "git+https://github.com/andrewrk/zqlite.zig.git#205dcc49a212b27e5a78868cda09135d0945fc7a",
+            .hash = "zqlite-0.0.1-RWLaY36cmAC0Sznz0iy75CjxMjGCkUjZzIa-Si2pitGe",
+        },
+        .cbor = .{
+            .url = "git+https://github.com/neurocyte/cbor#defb24a36aa497473636c653a4eb4bc92b6a65b5",
+            .hash = "cbor-1.0.0-RcQE_HQwAQCukORH_t6Aa2AGQ7igyWCHpjj6dYf2ivQJ",
+        },
+    },
+    .minimum_zig_version = "0.16.0-dev.2821+3edaef9e0",
+    .paths = .{""},
+    .fingerprint = 0xc320b4c19ccd1905,
+}
