@@ -9,7 +9,7 @@ pub const Html = struct {
     io: Io,
     session: ?i64,
 
-    pub fn open(h: Html, tag: zigweb.Html.Tag, attrs: []const zigweb.Html.Attr) !void {
+    pub fn open(h: Html, comptime tag: zigweb.Html.Tag, attrs: tag.Attrs()) !void {
         try h.inner.open(tag, attrs);
     }
 
@@ -30,53 +30,53 @@ pub fn renderPage(inner: *zigweb.Html, comptime page: fn (Html) anyerror!void, s
     const h: Html = .{ .inner = inner, .app = app, .io = io, .session = session };
 
     try h.raw("<!DOCTYPE html>");
-    try h.open(.html, &.{.{ .lang = "en" }});
+    try h.open(.html, .{ .lang = "en" });
     defer h.close(.html);
 
     {
-        try h.open(.head, &.{});
+        try h.open(.head, .{});
         defer h.close(.head);
 
-        try h.open(.meta, &.{.{ .charset = "utf-8" }});
-        try h.open(.meta, &.{ .{ .name = "viewport" }, .{ .content = "width=device-width, initial-scale=1" } });
+        try h.open(.meta, .{ .charset = "utf-8" });
+        try h.open(.meta, .{ .name = "viewport", .content = "width=device-width, initial-scale=1" });
 
         {
-            try h.open(.title, &.{});
+            try h.open(.title, .{});
             defer h.close(.title);
             try h.text("ZigWeb Demo");
         }
 
-        try h.open(.link, &.{ .{ .rel = "stylesheet" }, .{ .href = "/style.css" } });
+        try h.open(.link, .{ .rel = "stylesheet", .href = "/style.css" });
     }
 
     {
-        try h.open(.body, &.{});
+        try h.open(.body, .{});
         defer h.close(.body);
 
         if (h.session != null) {
-            try h.open(.nav, &.{});
+            try h.open(.nav, .{});
             defer h.close(.nav);
 
             {
-                try h.open(.a, &.{.{ .href = "/" }});
+                try h.open(.a, .{ .href = "/" });
                 defer h.close(.a);
                 try h.text("Home");
             }
             {
-                try h.open(.a, &.{.{ .href = "/notes" }});
+                try h.open(.a, .{ .href = "/notes" });
                 defer h.close(.a);
                 try h.text("Notes");
             }
         }
 
         {
-            try h.open(.main, &.{});
+            try h.open(.main, .{});
             defer h.close(.main);
             try page(h);
         }
 
         {
-            try h.open(.script, &.{.{ .src = "/auth.js" }});
+            try h.open(.script, .{ .src = "/auth.js" });
             h.close(.script);
         }
     }

@@ -1,6 +1,7 @@
 const Html = @This();
 const std = @import("std");
 const Writer = std.Io.Writer;
+const superhtml_html = @import("superhtml").html;
 
 writer: *Writer,
 
@@ -59,78 +60,80 @@ pub const Tag = enum {
             else => false,
         };
     }
-};
 
-// -- Attr union --
+    const FieldAttrs = std.builtin.Type.StructField.Attributes;
+    const null_str: ?[]const u8 = null;
+    const null_bool: ?bool = null;
+    const default_str = FieldAttrs{ .default_value_ptr = @ptrCast(&null_str) };
+    const default_bool = FieldAttrs{ .default_value_ptr = @ptrCast(&null_bool) };
 
-pub const Attr = union(enum) {
-    class: []const u8,
-    id: []const u8,
-    href: []const u8,
-    method: []const u8,
-    action: []const u8,
-    @"type": []const u8,
-    name: []const u8,
-    value: []const u8,
-    rel: []const u8,
-    charset: []const u8,
-    content: []const u8,
-    src: []const u8,
-    alt: []const u8,
-    @"for": []const u8,
-    placeholder: []const u8,
-    rows: []const u8,
-    datetime: []const u8,
-    @"hx-get": []const u8,
-    @"hx-post": []const u8,
-    @"hx-delete": []const u8,
-    @"hx-target": []const u8,
-    @"hx-swap": []const u8,
-    @"hx-trigger": []const u8,
-    @"hx-vals": []const u8,
-    @"hx-confirm": []const u8,
-    @"hx-include": []const u8,
-    @"hx-sync": []const u8,
-    @"hx-push-url": []const u8,
-    inputmode: []const u8,
-    enterkeyhint: []const u8,
-    step: []const u8,
-    lang: []const u8,
-    enctype: []const u8,
-    accept: []const u8,
-    loading: []const u8,
-    referrerpolicy: []const u8,
-    disabled: bool,
-    download: bool,
-    selected: bool,
-    required: bool,
-    checked: bool,
+    pub fn Attrs(comptime tag: Tag) type {
+        @setEvalBranchQuota(10000);
+        const htmx_names: []const []const u8 = &.{
+            "hx-get",      "hx-post",     "hx-put",      "hx-delete",   "hx-patch",
+            "hx-trigger",  "hx-target",   "hx-swap",     "hx-include",  "hx-select",
+            "hx-confirm",  "hx-push-url", "hx-vals",     "hx-sync",     "hx-boost",
+        };
 
-    pub fn write(self: Attr, w: *Writer) !void {
-        switch (self) {
-            .disabled, .download, .selected, .required, .checked => |val| {
-                if (val) try w.print(" {s}", .{@tagName(self)});
-            },
-            inline else => |val, tag| {
-                try w.print(" {s}=\"", .{@tagName(tag)});
-                try escapeAttr(w, val);
-                try w.writeAll("\"");
-            },
+        const kind = std.meta.stringToEnum(superhtml_html.Ast.Kind, tag.str()) orelse
+            return @Struct(.auto, null, &.{}, &.{}, &.{});
+
+        const elem_set = superhtml_html.Attribute.element_attrs.get(kind);
+        const global_set = &superhtml_html.Attribute.global;
+
+        const max_fields = elem_set.list.len + global_set.list.len + htmx_names.len;
+        var names: [max_fields][]const u8 = undefined;
+        var types: [max_fields]type = undefined;
+        var attrs: [max_fields]FieldAttrs = undefined;
+        var count: usize = 0;
+
+        for ([_][]const superhtml_html.Attribute.Named{ elem_set.list, global_set.list }) |list| {
+            for (list) |named| {
+                const is_bool = switch (named.model.rule) {
+                    .bool => true,
+                    else => false,
+                };
+                names[count] = named.name;
+                types[count] = if (is_bool) ?bool else ?[]const u8;
+                attrs[count] = if (is_bool) default_bool else default_str;
+                count += 1;
+            }
         }
+
+        for (htmx_names) |hx_name| {
+            names[count] = hx_name;
+            types[count] = ?[]const u8;
+            attrs[count] = default_str;
+            count += 1;
+        }
+
+        return @Struct(.auto, null, names[0..count], types[0..count], attrs[0..count]);
     }
 };
 
 // -- Element API --
 
-pub fn open(h: *Html, tag: Tag, attrs: []const Attr) !void {
+pub fn open(h: *Html, comptime tag: Tag, attrs: tag.Attrs()) !void {
     try h.writer.print("<{s}", .{tag.str()});
-    for (attrs) |attr| {
-        try attr.write(h.writer);
-    }
+    try writeAttrs(h.writer, attrs);
     if (tag.isVoid()) {
         try h.writer.writeAll(" />");
     } else {
         try h.writer.writeAll(">");
+    }
+}
+
+fn writeAttrs(w: *Writer, attrs: anytype) !void {
+    inline for (@typeInfo(@TypeOf(attrs)).@"struct".fields) |f| {
+        if (@field(attrs, f.name)) |val| {
+            if (@TypeOf(val) == bool) {
+                if (val) try w.print(" {s}", .{f.name});
+            } else {
+                try w.print(" {s}=\"", .{f.name});
+                try escapeAttr(w, val);
+                try w.writeAll("\"");
+            }
+        }
     }
 }
 

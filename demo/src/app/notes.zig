@@ -8,32 +8,32 @@ pub fn list(h: Html) !void {
     const credential = h.session orelse return;
 
     {
-        try h.open(.h1, &.{});
+        try h.open(.h1, .{});
         defer h.close(.h1);
         try h.text("Notes");
     }
 
     // Add note form
     {
-        try h.open(.form, &.{ .{ .method = "POST" }, .{ .action = "/notes/add" } });
+        try h.open(.form, .{ .method = "POST", .action = "/notes/add" });
         defer h.close(.form);
 
-        try h.open(.textarea, &.{ .{ .name = "content" }, .{ .placeholder = "Write a note..." }, .{ .rows = "3" }, .{ .required = true } });
+        try h.open(.textarea, .{ .name = "content", .placeholder = "Write a note...", .rows = "3", .required = true });
         h.close(.textarea);
 
-        try h.open(.button, &.{.{ .@"type" = "submit" }});
+        try h.open(.button, .{ .@"type" = "submit" });
         defer h.close(.button);
         try h.text("Add Note");
     }
 
     // List notes
     {
-        try h.open(.ul, &.{});
+        try h.open(.ul, .{});
         defer h.close(.ul);
 
         var rows = h.app.qs.list_notes.run(@src(), h.app.db.*, .{ .credential = credential });
         while (rows.next()) |row| {
-            try h.open(.li, &.{});
+            try h.open(.li, .{});
             defer h.close(.li);
             try h.text(row.textNoDupe(.content));
         }
