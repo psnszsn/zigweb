@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: master
+      - run: zig fmt --check src/ demo/src/
+
+  integration-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: master
+      - uses: cachix/install-nix-action@v30
+      - name: Build demo
+        run: cd demo && zig build
+      - name: Start demo server
+        run: cd demo && ./zig-out/bin/demo &
+      - name: Wait for server
+        run: timeout 30 bash -c 'until curl -sf http://localhost:8080 > /dev/null; do sleep 0.5; done'
+      - name: Run integration tests
+        run: nix develop ./integration --command pytest -v integration/tests/

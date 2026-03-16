@@ -242,7 +242,8 @@ fn getTables(arena: Allocator, conn: zqlite.Conn) !StringMap {
 
 fn getSchemaEntries(arena: Allocator, conn: zqlite.Conn, schema_type: []const u8) !StringMap {
     var buf: [128]u8 = undefined;
-    const query = std.fmt.bufPrint(&buf,
+    const query = std.fmt.bufPrint(
+        &buf,
         "SELECT name, sql FROM sqlite_schema WHERE type = '{s}' AND sql IS NOT NULL",
         .{schema_type},
     ) catch return error.BufOverflow;

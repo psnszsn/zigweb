@@ -70,9 +70,9 @@ pub const Tag = enum {
     pub fn Attrs(comptime tag: Tag) type {
         @setEvalBranchQuota(10000);
         const htmx_names: []const []const u8 = &.{
-            "hx-get",      "hx-post",     "hx-put",      "hx-delete",   "hx-patch",
-            "hx-trigger",  "hx-target",   "hx-swap",     "hx-include",  "hx-select",
-            "hx-confirm",  "hx-push-url", "hx-vals",     "hx-sync",     "hx-boost",
+            "hx-get",     "hx-post",     "hx-put",  "hx-delete",  "hx-patch",
+            "hx-trigger", "hx-target",   "hx-swap", "hx-include", "hx-select",
+            "hx-confirm", "hx-push-url", "hx-vals", "hx-sync",    "hx-boost",
         };
 
         const kind = std.meta.stringToEnum(superhtml_html.Ast.Kind, tag.str()) orelse
@@ -151,7 +151,6 @@ pub fn text(h: *Html, s: []const u8) !void {
 pub fn raw(h: *Html, s: []const u8) !void {
     try h.writer.writeAll(s);
 }
-
 
 // -- Escaping --
 

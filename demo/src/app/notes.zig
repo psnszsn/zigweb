@@ -21,7 +21,7 @@ pub fn list(h: Html) !void {
         try h.open(.textarea, .{ .name = "content", .placeholder = "Write a note...", .rows = "3", .required = true });
         h.close(.textarea);
 
-        try h.open(.button, .{ .@"type" = "submit" });
+        try h.open(.button, .{ .type = "submit" });
         defer h.close(.button);
         try h.text("Add Note");
     }
