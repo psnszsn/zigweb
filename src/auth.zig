@@ -11,6 +11,12 @@ const Database = @import("Database.zig");
 const log = std.log.scoped(.auth);
 
 const max_pending = 64;
+const challenge_timeout = Io.Duration.fromSeconds(5 * 60);
+
+const PendingChallenge = struct {
+    challenge: [32]u8,
+    timestamp: Io.Timestamp,
+};
 
 pub const Config = struct {
     app_name: []const u8,
@@ -23,11 +29,11 @@ pub const Config = struct {
 config: Config,
 db: *Database,
 mutex: *Io.Mutex,
-challenge_buf: [max_pending][32]u8 = undefined,
+challenge_buf: [max_pending]PendingChallenge = undefined,
 pending_challenges: ChallengeList = .empty,
 qs: Queries = undefined,
 
-const ChallengeList = std.ArrayList([32]u8);
+const ChallengeList = std.ArrayList(PendingChallenge);
 
 const Queries = struct {
     insert_credential: Database.Query(
@@ -52,29 +58,31 @@ const Queries = struct {
     ),
 };
 
-pub fn init(cfg: Config, db: *Database, mtx: *Io.Mutex) Auth {
-    var auth: Auth = .{
+pub fn init(auth: *Auth, cfg: Config, db: *Database, mtx: *Io.Mutex) void {
+    auth.* = .{
         .config = cfg,
         .db = db,
         .mutex = mtx,
     };
     auth.pending_challenges = ChallengeList.initBuffer(&auth.challenge_buf);
     auth.qs = db.initQueries(Queries);
-    return auth;
 }
 
 pub fn handleRegisterChallenge(auth: *Auth, request: *std.http.Server.Request, io: Io) !void {
     var challenge: [32]u8 = undefined;
     io.random(&challenge);
 
+    const now = Io.Timestamp.now(io, .real);
+
     {
         auth.mutex.lockUncancelable(io);
         defer auth.mutex.unlock(io);
 
+        auth.evictExpiredChallenges(now);
         if (auth.pending_challenges.capacity == auth.pending_challenges.items.len) {
             _ = auth.pending_challenges.orderedRemove(0);
         }
-        auth.pending_challenges.appendAssumeCapacity(challenge);
+        auth.pending_challenges.appendAssumeCapacity(.{ .challenge = challenge, .timestamp = now });
     }
 
     var challenge_b64_buf: [64]u8 = undefined;
@@ -90,8 +98,8 @@ pub fn handleRegisterChallenge(auth: *Auth, request: *std.http.Server.Request, i
     });
 
     try body_writer.writer.print(
-        \\{{"challenge":"{s}","rp":{{"name":"{s}","id":"{s}"}},"pubKeyCredParams":[{{"type":"public-key","alg":-7}}],"authenticatorSelection":{{"userVerification":"preferred","residentKey":"preferred"}},"user":{{"id":"{s}","name":"user","displayName":"User"}}}}
-    , .{ challenge_b64, auth.config.app_name, auth.config.rp_id, challenge_b64 });
+        \\{{"challenge":"{s}","rp":{{"name":"{s}"}},"pubKeyCredParams":[{{"type":"public-key","alg":-7}}],"authenticatorSelection":{{"userVerification":"preferred","residentKey":"preferred"}},"user":{{"id":"{s}","name":"user","displayName":"User"}}}}
+    , .{ challenge_b64, auth.config.app_name, challenge_b64 });
     try body_writer.end();
 }
 
@@ -229,7 +237,7 @@ pub fn handleRegister(auth: *Auth, request: *std.http.Server.Request, io: Io) !v
         auth.mutex.lockUncancelable(io);
         defer auth.mutex.unlock(io);
 
-        if (!auth.consumeChallenge(challenge_raw)) {
+        if (!auth.consumeChallenge(challenge_raw, Io.Timestamp.now(io, .real))) {
             try request.respond("Unknown challenge", .{ .status = .bad_request });
             return;
         }
@@ -254,14 +262,17 @@ pub fn handleLoginChallenge(auth: *Auth, request: *std.http.Server.Request, io: 
     var challenge: [32]u8 = undefined;
     io.random(&challenge);
 
+    const now = Io.Timestamp.now(io, .real);
+
     {
         auth.mutex.lockUncancelable(io);
         defer auth.mutex.unlock(io);
 
+        auth.evictExpiredChallenges(now);
         if (auth.pending_challenges.capacity == auth.pending_challenges.items.len) {
             _ = auth.pending_challenges.orderedRemove(0);
         }
-        auth.pending_challenges.appendAssumeCapacity(challenge);
+        auth.pending_challenges.appendAssumeCapacity(.{ .challenge = challenge, .timestamp = now });
     }
 
     var challenge_b64_buf: [64]u8 = undefined;
@@ -420,17 +431,6 @@ pub fn handleLogin(auth: *Auth, request: *std.http.Server.Request, io: Io) !void
         return;
     };
 
-    // Consume challenge under lock
-    {
-        auth.mutex.lockUncancelable(io);
-        defer auth.mutex.unlock(io);
-
-        if (!auth.consumeChallenge(challenge_raw)) {
-            try request.respond("Unknown challenge", .{ .status = .bad_request });
-            return;
-        }
-    }
-
     // DB ops outside lock
     const row = auth.qs.select_credential.run(@src(), auth.db.*, .{
         .cred_id = zqlite.blob(cred_id_raw[0..cred_id_len]),
@@ -459,6 +459,17 @@ pub fn handleLogin(auth: *Auth, request: *std.http.Server.Request, io: Io) !void
         try request.respond("Signature verification failed", .{ .status = .bad_request });
         return;
     };
+
+    // Consume challenge under lock (after successful signature verification)
+    {
+        auth.mutex.lockUncancelable(io);
+        defer auth.mutex.unlock(io);
+
+        if (!auth.consumeChallenge(challenge_raw, Io.Timestamp.now(io, .real))) {
+            try request.respond("Unknown challenge", .{ .status = .bad_request });
+            return;
+        }
+    }
 
     // Generate session token and insert
     var token: [16]u8 = undefined;
@@ -516,21 +527,35 @@ pub fn getSession(auth: *const Auth, request: *std.http.Server.Request) ?i64 {
     return null;
 }
 
-fn consumeChallenge(auth: *Auth, challenge: [32]u8) bool {
+fn isExpired(timestamp: Io.Timestamp, now: Io.Timestamp) bool {
+    return timestamp.durationTo(now).nanoseconds > challenge_timeout.nanoseconds;
+}
+
+fn consumeChallenge(auth: *Auth, challenge: [32]u8, now: Io.Timestamp) bool {
     for (auth.pending_challenges.items, 0..) |pending, i| {
-        if (std.mem.eql(u8, &pending, &challenge)) {
+        if (std.mem.eql(u8, &pending.challenge, &challenge)) {
             _ = auth.pending_challenges.orderedRemove(i);
-            return true;
+            return !isExpired(pending.timestamp, now);
         }
     }
     return false;
 }
 
+fn evictExpiredChallenges(auth: *Auth, now: Io.Timestamp) void {
+    var i: usize = 0;
+    while (i < auth.pending_challenges.items.len) {
+        if (isExpired(auth.pending_challenges.items[i].timestamp, now)) {
+            _ = auth.pending_challenges.orderedRemove(i);
+        } else {
+            i += 1;
+        }
+    }
+}
+
 fn parseSessionToken(request: *std.http.Server.Request) ?[16]u8 {
     const cookie_value = getSessionCookie(request) orelse return null;
     var token: [16]u8 = undefined;
-    var i: usize = 0;
-    while (i < 16) : (i += 1) {
+    for (0..16) |i| {
         token[i] = std.fmt.parseInt(u8, cookie_value[i * 2 ..][0..2], 16) catch return null;
     }
     return token;
@@ -561,12 +586,16 @@ fn getSessionCookie(request: *std.http.Server.Request) ?[]const u8 {
     var iter = request.iterateHeaders();
     while (iter.next()) |header| {
         if (std.ascii.eqlIgnoreCase(header.name, "cookie")) {
-            // Find session=<32 hex chars>
-            if (std.mem.indexOf(u8, header.value, "session=")) |pos| {
-                const start = pos + "session=".len;
-                if (header.value.len >= start + 32) {
-                    return header.value[start .. start + 32];
+            // Find session=<32 hex chars>, ensuring it's a full cookie name
+            var search_from: usize = 0;
+            while (std.mem.indexOfPos(u8, header.value, search_from, "session=")) |pos| {
+                if (pos == 0 or std.mem.eql(u8, header.value[pos - 2 .. pos], "; ")) {
+                    const start = pos + "session=".len;
+                    if (header.value.len >= start + 32) {
+                        return header.value[start .. start + 32];
+                    }
                 }
+                search_from = pos + 1;
             }
         }
     }
@@ -585,8 +614,7 @@ fn readBody(request: *std.http.Server.Request, read_buf: []u8, body_buf: []u8) ?
 fn parseAttestationObject(data: []const u8, auth_data_out: *[]const u8) bool {
     var iter: []const u8 = data;
     const n_items = cbor.decodeMapHeader(&iter) catch return false;
-    var i: usize = 0;
-    while (i < n_items) : (i += 1) {
+    for (0..n_items) |_| {
         var key: []const u8 = undefined;
         if (!(cbor.matchString(&iter, &key) catch return false)) return false;
         if (std.mem.eql(u8, key, "authData")) {
@@ -601,71 +629,79 @@ fn parseAttestationObject(data: []const u8, auth_data_out: *[]const u8) bool {
     return false;
 }
 
+const CoseKey = enum(i64) {
+    kty = 1,
+    alg = 3,
+    crv = -1,
+    x = -2,
+    y = -3,
+    _,
+};
+
+const CoseKty = enum(i64) {
+    ec2 = 2,
+    _,
+};
+
+const CoseAlg = enum(i64) {
+    es256 = -7,
+    _,
+};
+
+const CoseCrv = enum(i64) {
+    p256 = 1,
+    _,
+};
+
 fn parseCoseKey(data: []const u8) !EcdsaP256Sha256.PublicKey {
     var iter: []const u8 = data;
     const n_items = cbor.decodeMapHeader(&iter) catch return error.InvalidCoseKey;
 
     var x: ?[]const u8 = null;
     var y: ?[]const u8 = null;
-    var kty: ?i64 = null;
-    var alg: ?i64 = null;
-    var crv: ?i64 = null;
+    var kty: ?CoseKty = null;
+    var alg: ?CoseAlg = null;
+    var crv: ?CoseCrv = null;
 
-    var i: usize = 0;
-    while (i < n_items) : (i += 1) {
+    for (0..n_items) |_| {
         var key_int: i64 = 0;
         if (cbor.matchInt(i64, &iter, &key_int) catch return error.InvalidCoseKey) {
-            switch (key_int) {
-                1 => { // kty
-                    var val: i64 = 0;
-                    if (!(cbor.matchInt(i64, &iter, &val) catch return error.InvalidCoseKey)) return error.InvalidCoseKey;
-                    kty = val;
-                },
-                3 => { // alg
-                    var val: i64 = 0;
-                    if (!(cbor.matchInt(i64, &iter, &val) catch return error.InvalidCoseKey)) return error.InvalidCoseKey;
-                    alg = val;
-                },
-                -1 => { // crv
-                    var val: i64 = 0;
-                    if (!(cbor.matchInt(i64, &iter, &val) catch return error.InvalidCoseKey)) return error.InvalidCoseKey;
-                    crv = val;
-                },
-                -2 => { // x coordinate
-                    var val: []const u8 = undefined;
-                    if (!(cbor.matchString(&iter, &val) catch return error.InvalidCoseKey)) return error.InvalidCoseKey;
-                    x = val;
-                },
-                -3 => { // y coordinate
-                    var val: []const u8 = undefined;
-                    if (!(cbor.matchString(&iter, &val) catch return error.InvalidCoseKey)) return error.InvalidCoseKey;
-                    y = val;
-                },
-                else => {
-                    cbor.skipValue(&iter) catch return error.InvalidCoseKey;
-                },
+            const key: CoseKey = @enumFromInt(key_int);
+            switch (key) {
+                .kty => kty = readIntEnum(CoseKty, &iter) orelse return error.InvalidCoseKey,
+                .alg => alg = readIntEnum(CoseAlg, &iter) orelse return error.InvalidCoseKey,
+                .crv => crv = readIntEnum(CoseCrv, &iter) orelse return error.InvalidCoseKey,
+                .x => x = readBytes(&iter) orelse return error.InvalidCoseKey,
+                .y => y = readBytes(&iter) orelse return error.InvalidCoseKey,
+                _ => cbor.skipValue(&iter) catch return error.InvalidCoseKey,
             }
         } else {
-            // non-integer key, skip key and value
             cbor.skipValue(&iter) catch return error.InvalidCoseKey;
         }
     }
 
-    // Verify: kty=2 (EC2), alg=-7 (ES256), crv=1 (P-256)
-    if ((kty orelse return error.InvalidCoseKey) != 2) return error.InvalidCoseKey;
-    if ((alg orelse return error.InvalidCoseKey) != -7) return error.InvalidCoseKey;
-    if ((crv orelse return error.InvalidCoseKey) != 1) return error.InvalidCoseKey;
+    if ((kty orelse return error.InvalidCoseKey) != .ec2) return error.InvalidCoseKey;
+    if ((alg orelse return error.InvalidCoseKey) != .es256) return error.InvalidCoseKey;
+    if ((crv orelse return error.InvalidCoseKey) != .p256) return error.InvalidCoseKey;
 
-    const x_bytes = x orelse return error.InvalidCoseKey;
-    const y_bytes = y orelse return error.InvalidCoseKey;
+    const x_val = x orelse return error.InvalidCoseKey;
+    const y_val = y orelse return error.InvalidCoseKey;
+    if (x_val.len != 32 or y_val.len != 32) return error.InvalidCoseKey;
 
-    if (x_bytes.len != 32 or y_bytes.len != 32) return error.InvalidCoseKey;
-
-    // Build SEC1 uncompressed point: 0x04 ++ x ++ y
-    var sec1: [65]u8 = undefined;
-    sec1[0] = 0x04;
-    @memcpy(sec1[1..33], x_bytes);
-    @memcpy(sec1[33..65], y_bytes);
-
+    const sec1 = [1]u8{0x04} ++ x_val[0..32].* ++ y_val[0..32].*;
     return EcdsaP256Sha256.PublicKey.fromSec1(&sec1) catch return error.InvalidCoseKey;
+}
+
+fn readIntEnum(comptime E: type, iter: *[]const u8) ?E {
+    var val: i64 = 0;
+    if (cbor.matchInt(i64, iter, &val) catch return null) {
+        return @enumFromInt(val);
+    }
+    return null;
+}
+
+fn readBytes(iter: *[]const u8) ?[]const u8 {
+    var val: []const u8 = undefined;
+    if (cbor.matchString(iter, &val) catch return null) return val;
+    return null;
 }

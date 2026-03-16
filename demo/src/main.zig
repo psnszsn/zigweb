@@ -38,17 +38,19 @@ pub fn main(init: std.process.Init) !void {
     var mutex: Io.Mutex = .init;
 
     const is_debug = @import("builtin").mode == .Debug;
-    var auth = zigweb.Auth.init(.{
+    const bypass_login = @import("build_options").bypass_login;
+    var auth: zigweb.Auth = undefined;
+    auth.init(.{
         .app_name = "ZigWeb Demo",
         .origin = if (is_debug) "http://localhost:8080" else "https://demo.example.com",
         .rp_id = if (is_debug) "localhost" else "demo.example.com",
-        .debug_bypass = is_debug,
+        .debug_bypass = bypass_login,
         .secure_cookie = !is_debug,
     }, &db, &mutex);
 
     var qs = db.initQueries(Queries);
 
-    if (is_debug) {
+    if (bypass_login) {
         db.conn.exec("INSERT OR IGNORE INTO credentials (id, cred_id, public_key) VALUES (1, X'00', X'00')", .{}) catch {};
     }
 
