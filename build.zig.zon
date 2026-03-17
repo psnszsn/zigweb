@@ -16,6 +16,11 @@
         },
     },
     .minimum_zig_version = "0.16.0-dev.2821+3edaef9e0",
-    .paths = .{""},
+    .paths = .{
+        "src",
+        "web",
+        "build.zig",
+        "build.zig.zon",
+    },
     .fingerprint = 0xc320b4c19ccd1905,
 }
