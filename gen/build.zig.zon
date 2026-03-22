@@ -1,0 +1,13 @@
+.{
+    .name = .gen,
+    .version = "0.0.1",
+    .dependencies = .{
+        .superhtml = .{
+            .url = "git+https://github.com/psnszsn/superhtml.git#06015aae1853b3f7e7accdf1d91102502ed8e322",
+            .hash = "superhtml-0.6.2-Y7MdPJs8JABdlTsY4NiF4WQ3zZquGoWzN0r7qUh9kHBh",
+        },
+    },
+    .minimum_zig_version = "0.16.0-dev.2821+3edaef9e0",
+    .paths = .{""},
+    .fingerprint = 0x59d70a39d389e5,
+}

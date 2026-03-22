@@ -68,6 +68,10 @@ pub fn init(auth: *Auth, cfg: Config, db: *Database, mtx: *Io.Mutex) void {
     auth.qs = db.initQueries(Queries);
 }
 
+pub fn deinit(auth: *Auth) void {
+    auth.db.deinitQueries(Queries, &auth.qs);
+}
+
 pub fn handleRegisterChallenge(auth: *Auth, request: *std.http.Server.Request, io: Io) !void {
     var challenge: [32]u8 = undefined;
     io.random(&challenge);

@@ -7,8 +7,6 @@ pub fn build(b: *std.Build) void {
     const cbor_dep = b.dependency("cbor", .{ .target = target, .optimize = optimize });
     const zqlite_dep = b.dependency("zqlite", .{ .target = target, .optimize = optimize });
 
-    const superhtml_dep = b.dependency("superhtml", .{ .target = target, .optimize = optimize });
-
     // Library module (for consumption by other packages)
     const zigweb_mod = b.addModule("zigweb", .{
         .root_source_file = b.path("src/root.zig"),
@@ -17,7 +15,6 @@ pub fn build(b: *std.Build) void {
     });
     zigweb_mod.addImport("cbor", cbor_dep.module("cbor"));
     zigweb_mod.addImport("zqlite", zqlite_dep.module("zqlite"));
-    zigweb_mod.addImport("superhtml", superhtml_dep.module("superhtml"));
 
     // zig build check -- verify all library code compiles
     const lib = b.addObject(.{

@@ -1,7 +1,7 @@
 const Html = @This();
 const std = @import("std");
 const Writer = std.Io.Writer;
-const superhtml_html = @import("superhtml").html;
+const generated_attrs = @import("generated_attrs.zig");
 
 writer: *Writer,
 
@@ -61,53 +61,8 @@ pub const Tag = enum {
         };
     }
 
-    const FieldAttrs = std.builtin.Type.StructField.Attributes;
-    const null_str: ?[]const u8 = null;
-    const null_bool: ?bool = null;
-    const default_str = FieldAttrs{ .default_value_ptr = @ptrCast(&null_str) };
-    const default_bool = FieldAttrs{ .default_value_ptr = @ptrCast(&null_bool) };
-
     pub fn Attrs(comptime tag: Tag) type {
-        @setEvalBranchQuota(10000);
-        const htmx_names: []const []const u8 = &.{
-            "hx-get",     "hx-post",     "hx-put",  "hx-delete",  "hx-patch",
-            "hx-trigger", "hx-target",   "hx-swap", "hx-include", "hx-select",
-            "hx-confirm", "hx-push-url", "hx-vals", "hx-sync",    "hx-boost",
-        };
-
-        const kind = std.meta.stringToEnum(superhtml_html.Ast.Kind, tag.str()) orelse
-            return @Struct(.auto, null, &.{}, &.{}, &.{});
-
-        const elem_set = superhtml_html.Attribute.element_attrs.get(kind);
-        const global_set = &superhtml_html.Attribute.global;
-
-        const max_fields = elem_set.list.len + global_set.list.len + htmx_names.len;
-        var names: [max_fields][]const u8 = undefined;
-        var types: [max_fields]type = undefined;
-        var attrs: [max_fields]FieldAttrs = undefined;
-        var count: usize = 0;
-
-        for ([_][]const superhtml_html.Attribute.Named{ elem_set.list, global_set.list }) |list| {
-            for (list) |named| {
-                const is_bool = switch (named.model.rule) {
-                    .bool => true,
-                    else => false,
-                };
-                names[count] = named.name;
-                types[count] = if (is_bool) ?bool else ?[]const u8;
-                attrs[count] = if (is_bool) default_bool else default_str;
-                count += 1;
-            }
-        }
-
-        for (htmx_names) |hx_name| {
-            names[count] = hx_name;
-            types[count] = ?[]const u8;
-            attrs[count] = default_str;
-            count += 1;
-        }
-
-        return @Struct(.auto, null, names[0..count], types[0..count], attrs[0..count]);
+        return @field(generated_attrs, @tagName(tag));
     }
 };
 
