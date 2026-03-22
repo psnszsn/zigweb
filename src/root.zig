@@ -4,3 +4,5 @@ pub const migrate = @import("Database/migrate.zig");
 pub const Html = @import("Html.zig");
 pub const Auth = @import("auth.zig");
 pub const server = @import("server.zig");
+pub const zqlite = @import("zqlite");
+pub const cbor = @import("cbor");
