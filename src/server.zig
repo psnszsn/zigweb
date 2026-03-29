@@ -92,3 +92,30 @@ pub fn parseTrailingId(target: []const u8, prefix: []const u8) ?i64 {
     const id_str = target[prefix.len..];
     return std.fmt.parseInt(i64, id_str, 10) catch null;
 }
+
+/// Send sd_notify READY=1 to systemd via the given NOTIFY_SOCKET path.
+/// No-op if the path is invalid.
+pub fn sdNotify(path: []const u8) void {
+    const posix = std.posix;
+    if (path.len == 0 or path.len > 107) return;
+
+    const rc = posix.system.socket(posix.AF.UNIX, posix.SOCK.DGRAM, 0);
+    if (posix.errno(rc) != .SUCCESS) return;
+    const fd: posix.fd_t = @intCast(rc);
+    defer _ = posix.system.close(fd);
+
+    var addr: posix.sockaddr.un = .{ .path = undefined };
+    if (path[0] == '@') {
+        addr.path[0] = 0;
+        @memcpy(addr.path[1..path.len], path[1..]);
+    } else {
+        @memcpy(addr.path[0..path.len], path);
+    }
+    if (addr.path.len > path.len) {
+        addr.path[path.len] = 0;
+    }
+
+    const msg = "READY=1";
+    _ = posix.system.sendto(fd, msg.ptr, msg.len, 0, @ptrCast(&addr), @sizeOf(posix.sockaddr.un));
+    log.info("Notified systemd (NOTIFY_SOCKET={s})", .{path});
+}
