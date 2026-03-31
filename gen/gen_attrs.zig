@@ -4,9 +4,10 @@ const Ast = superhtml_html.Ast;
 const Attribute = superhtml_html.Attribute;
 
 const htmx_names: []const []const u8 = &.{
-    "hx-get",     "hx-post",     "hx-put",  "hx-delete",  "hx-patch",
-    "hx-trigger", "hx-target",   "hx-swap", "hx-include", "hx-select",
-    "hx-confirm", "hx-push-url", "hx-vals", "hx-sync",    "hx-boost",
+    "hx-get",          "hx-post",     "hx-put",  "hx-delete",  "hx-patch",
+    "hx-trigger",      "hx-target",   "hx-swap", "hx-include", "hx-select",
+    "hx-confirm",      "hx-push-url", "hx-vals", "hx-sync",    "hx-boost",
+    "hx-disabled-elt",
 };
 
 const tags: []const []const u8 = &.{

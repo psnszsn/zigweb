@@ -116,6 +116,7 @@ pub const html = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const head = struct {
@@ -234,6 +235,7 @@ pub const head = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const title = struct {
@@ -352,6 +354,7 @@ pub const title = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const meta = struct {
@@ -476,6 +479,7 @@ pub const meta = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const link = struct {
@@ -610,6 +614,7 @@ pub const link = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const body = struct {
@@ -746,6 +751,7 @@ pub const body = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const div = struct {
@@ -864,6 +870,7 @@ pub const div = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const span = struct {
@@ -982,6 +989,7 @@ pub const span = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const p = struct {
@@ -1100,6 +1108,7 @@ pub const p = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const a = struct {
@@ -1226,6 +1235,7 @@ pub const a = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const button = struct {
@@ -1358,6 +1368,7 @@ pub const button = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const input = struct {
@@ -1510,6 +1521,7 @@ pub const input = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const br = struct {
@@ -1628,6 +1640,7 @@ pub const br = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const hr = struct {
@@ -1746,6 +1759,7 @@ pub const hr = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const ul = struct {
@@ -1864,6 +1878,7 @@ pub const ul = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const ol = struct {
@@ -1985,6 +2000,7 @@ pub const ol = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const li = struct {
@@ -2104,6 +2120,7 @@ pub const li = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const h1 = struct {
@@ -2222,6 +2239,7 @@ pub const h1 = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const h2 = struct {
@@ -2340,6 +2358,7 @@ pub const h2 = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const h3 = struct {
@@ -2458,6 +2477,7 @@ pub const h3 = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const section = struct {
@@ -2576,6 +2596,7 @@ pub const section = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const nav = struct {
@@ -2694,6 +2715,7 @@ pub const nav = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const header = struct {
@@ -2812,6 +2834,7 @@ pub const header = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const footer = struct {
@@ -2930,6 +2953,7 @@ pub const footer = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const main = struct {
@@ -3048,6 +3072,7 @@ pub const main = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const form = struct {
@@ -3174,6 +3199,7 @@ pub const form = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const label = struct {
@@ -3293,6 +3319,7 @@ pub const label = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const table = struct {
@@ -3411,6 +3438,7 @@ pub const table = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const tr = struct {
@@ -3529,6 +3557,7 @@ pub const tr = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const td = struct {
@@ -3650,6 +3679,7 @@ pub const td = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const th = struct {
@@ -3773,6 +3803,7 @@ pub const th = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const thead = struct {
@@ -3891,6 +3922,7 @@ pub const thead = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const tbody = struct {
@@ -4009,6 +4041,7 @@ pub const tbody = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const script = struct {
@@ -4137,6 +4170,7 @@ pub const script = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const img = struct {
@@ -4268,6 +4302,7 @@ pub const img = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const textarea = struct {
@@ -4399,6 +4434,7 @@ pub const textarea = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const select = struct {
@@ -4524,6 +4560,7 @@ pub const select = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const option = struct {
@@ -4646,6 +4683,7 @@ pub const option = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const time = struct {
@@ -4765,6 +4803,7 @@ pub const time = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const article = struct {
@@ -4883,6 +4922,7 @@ pub const article = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
 
 pub const small = struct {
@@ -5001,4 +5041,5 @@ pub const small = struct {
     @"hx-vals": ?[]const u8 = null,
     @"hx-sync": ?[]const u8 = null,
     @"hx-boost": ?[]const u8 = null,
+    @"hx-disabled-elt": ?[]const u8 = null,
 };
