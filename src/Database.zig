@@ -35,11 +35,6 @@ pub fn open(db_path: [:0]const u8) Database {
 pub fn init(comptime Tables: type, gpa: std.mem.Allocator, db_path: [:0]const u8) Database {
     const db = open(db_path);
 
-    tables.initTables(Tables, db.conn) catch {
-        std.debug.print("error creating tables\n", .{});
-        std.process.exit(1);
-    };
-
     tables.migrate.migrateSchema(Tables, gpa, db.conn) catch |err| {
         std.debug.print("error migrating schema: {s}\n", .{@errorName(err)});
         std.process.exit(1);
