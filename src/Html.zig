@@ -49,6 +49,8 @@ pub const Tag = enum {
     time,
     article,
     small,
+    details,
+    summary,
 
     pub fn str(self: Tag) []const u8 {
         return @tagName(self);

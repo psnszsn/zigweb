@@ -18,6 +18,7 @@ const tags: []const []const u8 = &.{
     "main",   "form",   "label",   "table",   "tr",     "td",
     "th",     "thead",  "tbody",   "script",  "img",    "textarea",
     "select", "option", "time",    "article", "small",
+    "details", "summary",
 };
 
 pub fn main(init: std.process.Init) void {
