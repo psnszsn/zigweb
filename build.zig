@@ -5,7 +5,16 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
 
     const cbor_dep = b.dependency("cbor", .{ .target = target, .optimize = optimize });
-    const zqlite_dep = b.dependency("zqlite", .{ .target = target, .optimize = optimize });
+
+    const sqlite3_cflags = &[_][]const u8{
+        "-std=c99",
+        "-DSQLITE_ENABLE_FTS5",
+    };
+    const zqlite_dep = b.dependency("zqlite", .{
+        .target = target,
+        .optimize = optimize,
+        .sqlite3 =  sqlite3_cflags,
+    });
 
     // Library module (for consumption by other packages)
     const zigweb_mod = b.addModule("zigweb", .{
