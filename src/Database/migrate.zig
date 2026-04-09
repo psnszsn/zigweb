@@ -42,6 +42,21 @@ pub fn migrateSchema(comptime Tables: type, gpa: Allocator, conn: zqlite.Conn) !
         }
     }
 
+    // Virtual tables: drop-and-recreate on SQL text mismatch. PRAGMA
+    // table_info misses USING fts5(...) options, so compare the stored
+    // sqlite_schema.sql directly — SQLite canonicalizes both sides
+    // identically, so byte equality works without normalization.
+    for (pristine_tables.keys(), pristine_tables.values()) |name, pristine_sql| {
+        if (!std.mem.startsWith(u8, pristine_sql, "CREATE VIRTUAL TABLE")) continue;
+        const db_sql = db_tables.get(name) orelse continue; // handled by "new tables" loop above
+        if (std.mem.eql(u8, pristine_sql, db_sql)) continue;
+
+        changes_made = true;
+        log.info("Recreating virtual table '{s}' (SQL changed)", .{name});
+        try dropTable(conn, name);
+        conn.execNoArgs(pristine_sql) catch return error.CreateTableFailed;
+    }
+
     // Removed tables (in db but not in pristine)
     for (db_tables.keys()) |name| {
         if (!pristine_tables.contains(name)) {
