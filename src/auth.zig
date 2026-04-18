@@ -27,15 +27,13 @@ pub const Config = struct {
 };
 
 config: Config,
-db: *Database,
 mutex: *Io.Mutex,
 challenge_buf: [max_pending]PendingChallenge = undefined,
 pending_challenges: ChallengeList = .empty,
-qs: Queries = undefined,
 
 const ChallengeList = std.ArrayList(PendingChallenge);
 
-const Queries = struct {
+pub const Queries = struct {
     insert_credential: Database.Query(
         "INSERT INTO credentials (cred_id, public_key) VALUES (?, ?)",
         .{ .kind = .exec, .args = struct { cred_id: zqlite.Blob, public_key: zqlite.Blob } },
@@ -58,478 +56,490 @@ const Queries = struct {
     ),
 };
 
-pub fn init(auth: *Auth, cfg: Config, db: *Database, mtx: *Io.Mutex) void {
+pub fn init(auth: *Auth, cfg: Config, mtx: *Io.Mutex) void {
     auth.* = .{
         .config = cfg,
-        .db = db,
         .mutex = mtx,
     };
     auth.pending_challenges = ChallengeList.initBuffer(&auth.challenge_buf);
-    auth.qs = db.initQueries(Queries);
 }
 
-pub fn deinit(auth: *Auth) void {
-    auth.db.deinitQueries(Queries, &auth.qs);
-}
+/// Per-request context. Bundles the `Auth` instance with the database
+/// connection and the per-slot `Queries` for that request, so every
+/// handler has a uniform 3-arg signature.
+pub const Ctx = struct {
+    auth: *Auth,
+    db: Database,
+    qs: *const Queries,
 
-pub fn handleRegisterChallenge(auth: *Auth, request: *std.http.Server.Request, io: Io) !void {
-    var challenge: [32]u8 = undefined;
-    io.random(&challenge);
+    pub fn handleRegisterChallenge(ctx: Ctx, request: *std.http.Server.Request, io: Io) !void {
+        const auth = ctx.auth;
+        var challenge: [32]u8 = undefined;
+        io.random(&challenge);
 
-    const now = Io.Timestamp.now(io, .real);
+        const now = Io.Timestamp.now(io, .real);
 
-    {
-        auth.mutex.lockUncancelable(io);
-        defer auth.mutex.unlock(io);
+        {
+            auth.mutex.lockUncancelable(io);
+            defer auth.mutex.unlock(io);
 
-        auth.evictExpiredChallenges(now);
-        if (auth.pending_challenges.capacity == auth.pending_challenges.items.len) {
-            _ = auth.pending_challenges.orderedRemove(0);
+            auth.evictExpiredChallenges(now);
+            if (auth.pending_challenges.capacity == auth.pending_challenges.items.len) {
+                _ = auth.pending_challenges.orderedRemove(0);
+            }
+            auth.pending_challenges.appendAssumeCapacity(.{ .challenge = challenge, .timestamp = now });
         }
-        auth.pending_challenges.appendAssumeCapacity(.{ .challenge = challenge, .timestamp = now });
+
+        var challenge_b64_buf: [64]u8 = undefined;
+        const challenge_b64 = base64url.Encoder.encode(&challenge_b64_buf, &challenge);
+
+        var write_buf: [4096]u8 = undefined;
+        var body_writer = try request.respondStreaming(&write_buf, .{
+            .respond_options = .{
+                .extra_headers = &.{
+                    .{ .name = "content-type", .value = "application/json" },
+                },
+            },
+        });
+
+        try body_writer.writer.print(
+            \\{{"challenge":"{s}","rp":{{"name":"{s}"}},"pubKeyCredParams":[{{"type":"public-key","alg":-7}}],"authenticatorSelection":{{"userVerification":"preferred","residentKey":"preferred"}},"user":{{"id":"{s}","name":"user","displayName":"User"}}}}
+        , .{ challenge_b64, auth.config.app_name, challenge_b64 });
+        try body_writer.end();
     }
 
-    var challenge_b64_buf: [64]u8 = undefined;
-    const challenge_b64 = base64url.Encoder.encode(&challenge_b64_buf, &challenge);
+    pub fn handleRegister(ctx: Ctx, request: *std.http.Server.Request, io: Io) !void {
+        const auth = ctx.auth;
+        const db = ctx.db;
+        const qs = ctx.qs;
+        var read_buf: [4096]u8 = undefined;
+        var body_buf: [4096]u8 = undefined;
+        const body = readBody(request, &read_buf, &body_buf) orelse {
+            try request.respond("Bad Request", .{ .status = .bad_request });
+            return;
+        };
 
-    var write_buf: [4096]u8 = undefined;
-    var body_writer = try request.respondStreaming(&write_buf, .{
-        .respond_options = .{
+        const parsed = std.json.parseFromSlice(RegisterRequest, std.heap.smp_allocator, body, .{ .ignore_unknown_fields = true }) catch {
+            try request.respond("Invalid JSON", .{ .status = .bad_request });
+            return;
+        };
+        defer parsed.deinit();
+        const reg = parsed.value;
+
+        // Decode clientDataJSON
+        var client_data_raw: [1024]u8 = undefined;
+        const client_data_len = base64url.Decoder.calcSizeForSlice(reg.clientDataJSON) catch {
+            try request.respond("Invalid base64", .{ .status = .bad_request });
+            return;
+        };
+        if (client_data_len > client_data_raw.len) {
+            try request.respond("clientDataJSON too large", .{ .status = .bad_request });
+            return;
+        }
+        base64url.Decoder.decode(&client_data_raw, reg.clientDataJSON) catch {
+            try request.respond("Invalid base64", .{ .status = .bad_request });
+            return;
+        };
+        const client_data_json = client_data_raw[0..client_data_len];
+
+        // Parse and verify clientDataJSON
+        const client_data = std.json.parseFromSlice(ClientData, std.heap.smp_allocator, client_data_json, .{ .ignore_unknown_fields = true }) catch {
+            try request.respond("Invalid clientDataJSON", .{ .status = .bad_request });
+            return;
+        };
+        defer client_data.deinit();
+
+        if (!std.mem.eql(u8, client_data.value.type, "webauthn.create")) {
+            try request.respond("Wrong type", .{ .status = .bad_request });
+            return;
+        }
+        if (!std.mem.eql(u8, client_data.value.origin, auth.config.origin)) {
+            try request.respond("Wrong origin", .{ .status = .bad_request });
+            return;
+        }
+
+        // Verify challenge
+        var challenge_raw: [32]u8 = undefined;
+        const chal_len = base64url.Decoder.calcSizeForSlice(client_data.value.challenge) catch {
+            try request.respond("Invalid challenge base64", .{ .status = .bad_request });
+            return;
+        };
+        if (chal_len != 32) {
+            try request.respond("Invalid challenge length", .{ .status = .bad_request });
+            return;
+        }
+        base64url.Decoder.decode(&challenge_raw, client_data.value.challenge) catch {
+            try request.respond("Invalid challenge base64", .{ .status = .bad_request });
+            return;
+        };
+
+        // Decode attestationObject (CBOR)
+        var att_raw: [2048]u8 = undefined;
+        const att_len = base64url.Decoder.calcSizeForSlice(reg.attestationObject) catch {
+            try request.respond("Invalid attestation base64", .{ .status = .bad_request });
+            return;
+        };
+        if (att_len > att_raw.len) {
+            try request.respond("attestationObject too large", .{ .status = .bad_request });
+            return;
+        }
+        base64url.Decoder.decode(&att_raw, reg.attestationObject) catch {
+            try request.respond("Invalid attestation base64", .{ .status = .bad_request });
+            return;
+        };
+        const att_bytes = att_raw[0..att_len];
+
+        // Parse CBOR attestation object to extract authData
+        var auth_data_slice: []const u8 = undefined;
+        const att_parsed = parseAttestationObject(att_bytes, &auth_data_slice);
+        if (!att_parsed) {
+            try request.respond("Invalid attestation object", .{ .status = .bad_request });
+            return;
+        }
+
+        // Parse authData: rpIdHash(32) + flags(1) + signCount(4) + aaguid(16) + credIdLen(2) + credId + coseKey
+        if (auth_data_slice.len < 55) {
+            try request.respond("authData too short", .{ .status = .bad_request });
+            return;
+        }
+
+        // Verify rpIdHash
+        var expected_rp_hash: [32]u8 = undefined;
+        Sha256.hash(auth.config.rp_id, &expected_rp_hash, .{});
+        if (!std.mem.eql(u8, auth_data_slice[0..32], &expected_rp_hash)) {
+            try request.respond("rpIdHash mismatch", .{ .status = .bad_request });
+            return;
+        }
+
+        // Verify flags: UP (bit 0) and AT (bit 6) must be set for registration
+        const flags = auth_data_slice[32];
+        if (flags & 0x41 != 0x41) {
+            try request.respond("Missing UP or AT flag", .{ .status = .bad_request });
+            return;
+        }
+
+        // aaguid at offset 37..53, credIdLen at 53..55
+        const cred_id_len = std.mem.readInt(u16, auth_data_slice[53..55], .big);
+        const cred_data_start: usize = 55;
+        const cred_data_end = cred_data_start + cred_id_len;
+
+        if (auth_data_slice.len < cred_data_end) {
+            try request.respond("authData truncated", .{ .status = .bad_request });
+            return;
+        }
+
+        const cred_id_bytes = auth_data_slice[cred_data_start..cred_data_end];
+        const cose_key_bytes = auth_data_slice[cred_data_end..];
+
+        // Parse COSE key to get public key
+        const pub_key = parseCoseKey(cose_key_bytes) catch {
+            try request.respond("Invalid COSE key", .{ .status = .bad_request });
+            return;
+        };
+
+        // Serialize public key to SEC1 uncompressed (65 bytes)
+        const sec1 = pub_key.toUncompressedSec1();
+
+        // Consume challenge under lock
+        {
+            auth.mutex.lockUncancelable(io);
+            defer auth.mutex.unlock(io);
+
+            if (!auth.consumeChallenge(challenge_raw, Io.Timestamp.now(io, .real))) {
+                try request.respond("Unknown challenge", .{ .status = .bad_request });
+                return;
+            }
+        }
+
+        // DB ops outside lock
+        qs.insert_credential.run(@src(), db, .{
+            .cred_id = zqlite.blob(cred_id_bytes),
+            .public_key = zqlite.blob(&sec1),
+        });
+
+        log.info("Registered credential ({} bytes)", .{cred_id_bytes.len});
+
+        try request.respond("{\"ok\":true}", .{
             .extra_headers = &.{
                 .{ .name = "content-type", .value = "application/json" },
             },
-        },
-    });
-
-    try body_writer.writer.print(
-        \\{{"challenge":"{s}","rp":{{"name":"{s}"}},"pubKeyCredParams":[{{"type":"public-key","alg":-7}}],"authenticatorSelection":{{"userVerification":"preferred","residentKey":"preferred"}},"user":{{"id":"{s}","name":"user","displayName":"User"}}}}
-    , .{ challenge_b64, auth.config.app_name, challenge_b64 });
-    try body_writer.end();
-}
-
-pub fn handleRegister(auth: *Auth, request: *std.http.Server.Request, io: Io) !void {
-    var read_buf: [4096]u8 = undefined;
-    var body_buf: [4096]u8 = undefined;
-    const body = readBody(request, &read_buf, &body_buf) orelse {
-        try request.respond("Bad Request", .{ .status = .bad_request });
-        return;
-    };
-
-    const parsed = std.json.parseFromSlice(RegisterRequest, std.heap.smp_allocator, body, .{ .ignore_unknown_fields = true }) catch {
-        try request.respond("Invalid JSON", .{ .status = .bad_request });
-        return;
-    };
-    defer parsed.deinit();
-    const reg = parsed.value;
-
-    // Decode clientDataJSON
-    var client_data_raw: [1024]u8 = undefined;
-    const client_data_len = base64url.Decoder.calcSizeForSlice(reg.clientDataJSON) catch {
-        try request.respond("Invalid base64", .{ .status = .bad_request });
-        return;
-    };
-    if (client_data_len > client_data_raw.len) {
-        try request.respond("clientDataJSON too large", .{ .status = .bad_request });
-        return;
-    }
-    base64url.Decoder.decode(&client_data_raw, reg.clientDataJSON) catch {
-        try request.respond("Invalid base64", .{ .status = .bad_request });
-        return;
-    };
-    const client_data_json = client_data_raw[0..client_data_len];
-
-    // Parse and verify clientDataJSON
-    const client_data = std.json.parseFromSlice(ClientData, std.heap.smp_allocator, client_data_json, .{ .ignore_unknown_fields = true }) catch {
-        try request.respond("Invalid clientDataJSON", .{ .status = .bad_request });
-        return;
-    };
-    defer client_data.deinit();
-
-    if (!std.mem.eql(u8, client_data.value.type, "webauthn.create")) {
-        try request.respond("Wrong type", .{ .status = .bad_request });
-        return;
-    }
-    if (!std.mem.eql(u8, client_data.value.origin, auth.config.origin)) {
-        try request.respond("Wrong origin", .{ .status = .bad_request });
-        return;
-    }
-
-    // Verify challenge
-    var challenge_raw: [32]u8 = undefined;
-    const chal_len = base64url.Decoder.calcSizeForSlice(client_data.value.challenge) catch {
-        try request.respond("Invalid challenge base64", .{ .status = .bad_request });
-        return;
-    };
-    if (chal_len != 32) {
-        try request.respond("Invalid challenge length", .{ .status = .bad_request });
-        return;
-    }
-    base64url.Decoder.decode(&challenge_raw, client_data.value.challenge) catch {
-        try request.respond("Invalid challenge base64", .{ .status = .bad_request });
-        return;
-    };
-
-    // Decode attestationObject (CBOR)
-    var att_raw: [2048]u8 = undefined;
-    const att_len = base64url.Decoder.calcSizeForSlice(reg.attestationObject) catch {
-        try request.respond("Invalid attestation base64", .{ .status = .bad_request });
-        return;
-    };
-    if (att_len > att_raw.len) {
-        try request.respond("attestationObject too large", .{ .status = .bad_request });
-        return;
-    }
-    base64url.Decoder.decode(&att_raw, reg.attestationObject) catch {
-        try request.respond("Invalid attestation base64", .{ .status = .bad_request });
-        return;
-    };
-    const att_bytes = att_raw[0..att_len];
-
-    // Parse CBOR attestation object to extract authData
-    var auth_data_slice: []const u8 = undefined;
-    const att_parsed = parseAttestationObject(att_bytes, &auth_data_slice);
-    if (!att_parsed) {
-        try request.respond("Invalid attestation object", .{ .status = .bad_request });
-        return;
-    }
-
-    // Parse authData: rpIdHash(32) + flags(1) + signCount(4) + aaguid(16) + credIdLen(2) + credId + coseKey
-    if (auth_data_slice.len < 55) {
-        try request.respond("authData too short", .{ .status = .bad_request });
-        return;
-    }
-
-    // Verify rpIdHash
-    var expected_rp_hash: [32]u8 = undefined;
-    Sha256.hash(auth.config.rp_id, &expected_rp_hash, .{});
-    if (!std.mem.eql(u8, auth_data_slice[0..32], &expected_rp_hash)) {
-        try request.respond("rpIdHash mismatch", .{ .status = .bad_request });
-        return;
-    }
-
-    // Verify flags: UP (bit 0) and AT (bit 6) must be set for registration
-    const flags = auth_data_slice[32];
-    if (flags & 0x41 != 0x41) {
-        try request.respond("Missing UP or AT flag", .{ .status = .bad_request });
-        return;
-    }
-
-    // aaguid at offset 37..53, credIdLen at 53..55
-    const cred_id_len = std.mem.readInt(u16, auth_data_slice[53..55], .big);
-    const cred_data_start: usize = 55;
-    const cred_data_end = cred_data_start + cred_id_len;
-
-    if (auth_data_slice.len < cred_data_end) {
-        try request.respond("authData truncated", .{ .status = .bad_request });
-        return;
-    }
-
-    const cred_id_bytes = auth_data_slice[cred_data_start..cred_data_end];
-    const cose_key_bytes = auth_data_slice[cred_data_end..];
-
-    // Parse COSE key to get public key
-    const pub_key = parseCoseKey(cose_key_bytes) catch {
-        try request.respond("Invalid COSE key", .{ .status = .bad_request });
-        return;
-    };
-
-    // Serialize public key to SEC1 uncompressed (65 bytes)
-    const sec1 = pub_key.toUncompressedSec1();
-
-    // Consume challenge under lock
-    {
-        auth.mutex.lockUncancelable(io);
-        defer auth.mutex.unlock(io);
-
-        if (!auth.consumeChallenge(challenge_raw, Io.Timestamp.now(io, .real))) {
-            try request.respond("Unknown challenge", .{ .status = .bad_request });
-            return;
-        }
-    }
-
-    // DB ops outside lock
-    auth.qs.insert_credential.run(@src(), auth.db.*, .{
-        .cred_id = zqlite.blob(cred_id_bytes),
-        .public_key = zqlite.blob(&sec1),
-    });
-
-    log.info("Registered credential ({} bytes)", .{cred_id_bytes.len});
-
-    try request.respond("{\"ok\":true}", .{
-        .extra_headers = &.{
-            .{ .name = "content-type", .value = "application/json" },
-        },
-    });
-}
-
-pub fn handleLoginChallenge(auth: *Auth, request: *std.http.Server.Request, io: Io) !void {
-    var challenge: [32]u8 = undefined;
-    io.random(&challenge);
-
-    const now = Io.Timestamp.now(io, .real);
-
-    {
-        auth.mutex.lockUncancelable(io);
-        defer auth.mutex.unlock(io);
-
-        auth.evictExpiredChallenges(now);
-        if (auth.pending_challenges.capacity == auth.pending_challenges.items.len) {
-            _ = auth.pending_challenges.orderedRemove(0);
-        }
-        auth.pending_challenges.appendAssumeCapacity(.{ .challenge = challenge, .timestamp = now });
-    }
-
-    var challenge_b64_buf: [64]u8 = undefined;
-    const challenge_b64 = base64url.Encoder.encode(&challenge_b64_buf, &challenge);
-
-    var write_buf: [4096]u8 = undefined;
-    var body_writer = try request.respondStreaming(&write_buf, .{
-        .respond_options = .{
-            .extra_headers = &.{
-                .{ .name = "content-type", .value = "application/json" },
-            },
-        },
-    });
-
-    try body_writer.writer.print(
-        \\{{"challenge":"{s}","rpId":"{s}","userVerification":"preferred"}}
-    , .{ challenge_b64, auth.config.rp_id });
-    try body_writer.end();
-}
-
-pub fn handleLogin(auth: *Auth, request: *std.http.Server.Request, io: Io) !void {
-    var read_buf: [4096]u8 = undefined;
-    var body_buf: [4096]u8 = undefined;
-    const body = readBody(request, &read_buf, &body_buf) orelse {
-        try request.respond("Bad Request", .{ .status = .bad_request });
-        return;
-    };
-
-    const parsed = std.json.parseFromSlice(LoginRequest, std.heap.smp_allocator, body, .{ .ignore_unknown_fields = true }) catch {
-        try request.respond("Invalid JSON", .{ .status = .bad_request });
-        return;
-    };
-    defer parsed.deinit();
-    const login = parsed.value;
-
-    // Decode clientDataJSON
-    var client_data_raw: [1024]u8 = undefined;
-    const client_data_len = base64url.Decoder.calcSizeForSlice(login.clientDataJSON) catch {
-        try request.respond("Invalid base64", .{ .status = .bad_request });
-        return;
-    };
-    if (client_data_len > client_data_raw.len) {
-        try request.respond("clientDataJSON too large", .{ .status = .bad_request });
-        return;
-    }
-    base64url.Decoder.decode(&client_data_raw, login.clientDataJSON) catch {
-        try request.respond("Invalid base64", .{ .status = .bad_request });
-        return;
-    };
-    const client_data_json = client_data_raw[0..client_data_len];
-
-    // Parse and verify clientDataJSON
-    const client_data = std.json.parseFromSlice(ClientData, std.heap.smp_allocator, client_data_json, .{ .ignore_unknown_fields = true }) catch {
-        try request.respond("Invalid clientDataJSON", .{ .status = .bad_request });
-        return;
-    };
-    defer client_data.deinit();
-
-    if (!std.mem.eql(u8, client_data.value.type, "webauthn.get")) {
-        try request.respond("Wrong type", .{ .status = .bad_request });
-        return;
-    }
-    if (!std.mem.eql(u8, client_data.value.origin, auth.config.origin)) {
-        try request.respond("Wrong origin", .{ .status = .bad_request });
-        return;
-    }
-
-    // Verify challenge
-    var challenge_raw: [32]u8 = undefined;
-    const chal_len = base64url.Decoder.calcSizeForSlice(client_data.value.challenge) catch {
-        try request.respond("Invalid challenge base64", .{ .status = .bad_request });
-        return;
-    };
-    if (chal_len != 32) {
-        try request.respond("Invalid challenge length", .{ .status = .bad_request });
-        return;
-    }
-    base64url.Decoder.decode(&challenge_raw, client_data.value.challenge) catch {
-        try request.respond("Invalid challenge base64", .{ .status = .bad_request });
-        return;
-    };
-
-    // Decode credential ID
-    var cred_id_raw: [128]u8 = undefined;
-    const cred_id_len = base64url.Decoder.calcSizeForSlice(login.id) catch {
-        try request.respond("Invalid credential ID base64", .{ .status = .bad_request });
-        return;
-    };
-    if (cred_id_len > 128) {
-        try request.respond("Credential ID too long", .{ .status = .bad_request });
-        return;
-    }
-    base64url.Decoder.decode(&cred_id_raw, login.id) catch {
-        try request.respond("Invalid credential ID base64", .{ .status = .bad_request });
-        return;
-    };
-
-    // Decode authenticatorData
-    var auth_data_raw: [512]u8 = undefined;
-    const auth_data_len = base64url.Decoder.calcSizeForSlice(login.authenticatorData) catch {
-        try request.respond("Invalid authenticatorData base64", .{ .status = .bad_request });
-        return;
-    };
-    if (auth_data_len > auth_data_raw.len) {
-        try request.respond("authenticatorData too large", .{ .status = .bad_request });
-        return;
-    }
-    base64url.Decoder.decode(&auth_data_raw, login.authenticatorData) catch {
-        try request.respond("Invalid authenticatorData base64", .{ .status = .bad_request });
-        return;
-    };
-    const auth_data = auth_data_raw[0..auth_data_len];
-
-    // Decode signature
-    var sig_raw: [256]u8 = undefined;
-    const sig_len = base64url.Decoder.calcSizeForSlice(login.signature) catch {
-        try request.respond("Invalid signature base64", .{ .status = .bad_request });
-        return;
-    };
-    if (sig_len > sig_raw.len) {
-        try request.respond("Signature too large", .{ .status = .bad_request });
-        return;
-    }
-    base64url.Decoder.decode(&sig_raw, login.signature) catch {
-        try request.respond("Invalid signature base64", .{ .status = .bad_request });
-        return;
-    };
-
-    // Verify rpIdHash
-    if (auth_data_len < 37) {
-        try request.respond("authenticatorData too short", .{ .status = .bad_request });
-        return;
-    }
-    var expected_rp_hash: [32]u8 = undefined;
-    Sha256.hash(auth.config.rp_id, &expected_rp_hash, .{});
-    if (!std.mem.eql(u8, auth_data[0..32], &expected_rp_hash)) {
-        try request.respond("rpIdHash mismatch", .{ .status = .bad_request });
-        return;
-    }
-
-    // Verify UP flag (bit 0) must be set for login
-    if (auth_data[32] & 0x01 != 0x01) {
-        try request.respond("Missing UP flag", .{ .status = .bad_request });
-        return;
-    }
-
-    // Verify signature: signed_data = authenticatorData ++ sha256(clientDataJSON)
-    var client_data_hash: [32]u8 = undefined;
-    Sha256.hash(client_data_json, &client_data_hash, .{});
-    var signed_data: [544]u8 = undefined; // 512 (max auth_data) + 32 (hash)
-    @memcpy(signed_data[0..auth_data_len], auth_data);
-    @memcpy(signed_data[auth_data_len .. auth_data_len + 32], &client_data_hash);
-
-    const sig = EcdsaP256Sha256.Signature.fromDer(sig_raw[0..sig_len]) catch {
-        try request.respond("Invalid signature format", .{ .status = .bad_request });
-        return;
-    };
-
-    // DB ops outside lock
-    const row = auth.qs.select_credential.run(@src(), auth.db.*, .{
-        .cred_id = zqlite.blob(cred_id_raw[0..cred_id_len]),
-    });
-
-    if (row == null) {
-        try request.respond("Unknown credential", .{ .status = .bad_request });
-        return;
-    }
-
-    const cred_row = row.?;
-    const cred_db_id = cred_row.get(.id);
-    const sec1_blob = cred_row.textNoDupe(.public_key);
-
-    if (sec1_blob.len != 65) {
-        try request.respond("Corrupted credential", .{ .status = .internal_server_error });
-        return;
-    }
-
-    const pub_key = EcdsaP256Sha256.PublicKey.fromSec1(sec1_blob[0..65]) catch {
-        try request.respond("Corrupted credential key", .{ .status = .internal_server_error });
-        return;
-    };
-
-    sig.verify(signed_data[0 .. auth_data_len + 32], pub_key) catch {
-        try request.respond("Signature verification failed", .{ .status = .bad_request });
-        return;
-    };
-
-    // Consume challenge under lock (after successful signature verification)
-    {
-        auth.mutex.lockUncancelable(io);
-        defer auth.mutex.unlock(io);
-
-        if (!auth.consumeChallenge(challenge_raw, Io.Timestamp.now(io, .real))) {
-            try request.respond("Unknown challenge", .{ .status = .bad_request });
-            return;
-        }
-    }
-
-    // Generate session token and insert
-    var token: [16]u8 = undefined;
-    io.random(&token);
-
-    auth.qs.insert_session.run(@src(), auth.db.*, .{
-        .token = zqlite.blob(&token),
-        .credential = cred_db_id,
-    });
-
-    const token_hex = std.fmt.bytesToHex(token, .lower);
-    var cookie_buf: [128]u8 = undefined;
-    const secure_suffix: []const u8 = if (auth.config.secure_cookie) "; Secure" else "";
-    const cookie = std.fmt.bufPrint(&cookie_buf, "session={s}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000{s}", .{ token_hex, secure_suffix }) catch unreachable;
-
-    log.info("Login successful, session created", .{});
-
-    try request.respond("{\"ok\":true}", .{
-        .extra_headers = &.{
-            .{ .name = "content-type", .value = "application/json" },
-            .{ .name = "set-cookie", .value = cookie },
-        },
-    });
-}
-
-pub fn handleLogout(auth: *Auth, request: *std.http.Server.Request, _: Io) !void {
-    const token = parseSessionToken(request);
-    if (token) |t| {
-        auth.qs.delete_session.run(@src(), auth.db.*, .{
-            .token = zqlite.blob(&t),
         });
     }
 
-    try request.respond("", .{
-        .status = .see_other,
-        .extra_headers = &.{
-            .{ .name = "location", .value = "/" },
-            .{ .name = "set-cookie", .value = "session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0" },
-        },
-    });
-}
+    pub fn handleLoginChallenge(ctx: Ctx, request: *std.http.Server.Request, io: Io) !void {
+        const auth = ctx.auth;
+        var challenge: [32]u8 = undefined;
+        io.random(&challenge);
 
-pub fn getSession(auth: *const Auth, request: *std.http.Server.Request) ?i64 {
-    if (auth.config.debug_bypass) return 1;
+        const now = Io.Timestamp.now(io, .real);
 
-    const token = parseSessionToken(request) orelse return null;
+        {
+            auth.mutex.lockUncancelable(io);
+            defer auth.mutex.unlock(io);
 
-    const row = auth.qs.select_session.run(@src(), auth.db.*, .{
-        .token = zqlite.blob(&token),
-    });
+            auth.evictExpiredChallenges(now);
+            if (auth.pending_challenges.capacity == auth.pending_challenges.items.len) {
+                _ = auth.pending_challenges.orderedRemove(0);
+            }
+            auth.pending_challenges.appendAssumeCapacity(.{ .challenge = challenge, .timestamp = now });
+        }
 
-    if (row) |r| {
-        return r.get(.credential);
+        var challenge_b64_buf: [64]u8 = undefined;
+        const challenge_b64 = base64url.Encoder.encode(&challenge_b64_buf, &challenge);
+
+        var write_buf: [4096]u8 = undefined;
+        var body_writer = try request.respondStreaming(&write_buf, .{
+            .respond_options = .{
+                .extra_headers = &.{
+                    .{ .name = "content-type", .value = "application/json" },
+                },
+            },
+        });
+
+        try body_writer.writer.print(
+            \\{{"challenge":"{s}","rpId":"{s}","userVerification":"preferred"}}
+        , .{ challenge_b64, auth.config.rp_id });
+        try body_writer.end();
     }
-    return null;
-}
+
+    pub fn handleLogin(ctx: Ctx, request: *std.http.Server.Request, io: Io) !void {
+        const auth = ctx.auth;
+        const db = ctx.db;
+        const qs = ctx.qs;
+        var read_buf: [4096]u8 = undefined;
+        var body_buf: [4096]u8 = undefined;
+        const body = readBody(request, &read_buf, &body_buf) orelse {
+            try request.respond("Bad Request", .{ .status = .bad_request });
+            return;
+        };
+
+        const parsed = std.json.parseFromSlice(LoginRequest, std.heap.smp_allocator, body, .{ .ignore_unknown_fields = true }) catch {
+            try request.respond("Invalid JSON", .{ .status = .bad_request });
+            return;
+        };
+        defer parsed.deinit();
+        const login = parsed.value;
+
+        // Decode clientDataJSON
+        var client_data_raw: [1024]u8 = undefined;
+        const client_data_len = base64url.Decoder.calcSizeForSlice(login.clientDataJSON) catch {
+            try request.respond("Invalid base64", .{ .status = .bad_request });
+            return;
+        };
+        if (client_data_len > client_data_raw.len) {
+            try request.respond("clientDataJSON too large", .{ .status = .bad_request });
+            return;
+        }
+        base64url.Decoder.decode(&client_data_raw, login.clientDataJSON) catch {
+            try request.respond("Invalid base64", .{ .status = .bad_request });
+            return;
+        };
+        const client_data_json = client_data_raw[0..client_data_len];
+
+        // Parse and verify clientDataJSON
+        const client_data = std.json.parseFromSlice(ClientData, std.heap.smp_allocator, client_data_json, .{ .ignore_unknown_fields = true }) catch {
+            try request.respond("Invalid clientDataJSON", .{ .status = .bad_request });
+            return;
+        };
+        defer client_data.deinit();
+
+        if (!std.mem.eql(u8, client_data.value.type, "webauthn.get")) {
+            try request.respond("Wrong type", .{ .status = .bad_request });
+            return;
+        }
+        if (!std.mem.eql(u8, client_data.value.origin, auth.config.origin)) {
+            try request.respond("Wrong origin", .{ .status = .bad_request });
+            return;
+        }
+
+        // Verify challenge
+        var challenge_raw: [32]u8 = undefined;
+        const chal_len = base64url.Decoder.calcSizeForSlice(client_data.value.challenge) catch {
+            try request.respond("Invalid challenge base64", .{ .status = .bad_request });
+            return;
+        };
+        if (chal_len != 32) {
+            try request.respond("Invalid challenge length", .{ .status = .bad_request });
+            return;
+        }
+        base64url.Decoder.decode(&challenge_raw, client_data.value.challenge) catch {
+            try request.respond("Invalid challenge base64", .{ .status = .bad_request });
+            return;
+        };
+
+        // Decode credential ID
+        var cred_id_raw: [128]u8 = undefined;
+        const cred_id_len = base64url.Decoder.calcSizeForSlice(login.id) catch {
+            try request.respond("Invalid credential ID base64", .{ .status = .bad_request });
+            return;
+        };
+        if (cred_id_len > 128) {
+            try request.respond("Credential ID too long", .{ .status = .bad_request });
+            return;
+        }
+        base64url.Decoder.decode(&cred_id_raw, login.id) catch {
+            try request.respond("Invalid credential ID base64", .{ .status = .bad_request });
+            return;
+        };
+
+        // Decode authenticatorData
+        var auth_data_raw: [512]u8 = undefined;
+        const auth_data_len = base64url.Decoder.calcSizeForSlice(login.authenticatorData) catch {
+            try request.respond("Invalid authenticatorData base64", .{ .status = .bad_request });
+            return;
+        };
+        if (auth_data_len > auth_data_raw.len) {
+            try request.respond("authenticatorData too large", .{ .status = .bad_request });
+            return;
+        }
+        base64url.Decoder.decode(&auth_data_raw, login.authenticatorData) catch {
+            try request.respond("Invalid authenticatorData base64", .{ .status = .bad_request });
+            return;
+        };
+        const auth_data = auth_data_raw[0..auth_data_len];
+
+        // Decode signature
+        var sig_raw: [256]u8 = undefined;
+        const sig_len = base64url.Decoder.calcSizeForSlice(login.signature) catch {
+            try request.respond("Invalid signature base64", .{ .status = .bad_request });
+            return;
+        };
+        if (sig_len > sig_raw.len) {
+            try request.respond("Signature too large", .{ .status = .bad_request });
+            return;
+        }
+        base64url.Decoder.decode(&sig_raw, login.signature) catch {
+            try request.respond("Invalid signature base64", .{ .status = .bad_request });
+            return;
+        };
+
+        // Verify rpIdHash
+        if (auth_data_len < 37) {
+            try request.respond("authenticatorData too short", .{ .status = .bad_request });
+            return;
+        }
+        var expected_rp_hash: [32]u8 = undefined;
+        Sha256.hash(auth.config.rp_id, &expected_rp_hash, .{});
+        if (!std.mem.eql(u8, auth_data[0..32], &expected_rp_hash)) {
+            try request.respond("rpIdHash mismatch", .{ .status = .bad_request });
+            return;
+        }
+
+        // Verify UP flag (bit 0) must be set for login
+        if (auth_data[32] & 0x01 != 0x01) {
+            try request.respond("Missing UP flag", .{ .status = .bad_request });
+            return;
+        }
+
+        // Verify signature: signed_data = authenticatorData ++ sha256(clientDataJSON)
+        var client_data_hash: [32]u8 = undefined;
+        Sha256.hash(client_data_json, &client_data_hash, .{});
+        var signed_data: [544]u8 = undefined; // 512 (max auth_data) + 32 (hash)
+        @memcpy(signed_data[0..auth_data_len], auth_data);
+        @memcpy(signed_data[auth_data_len .. auth_data_len + 32], &client_data_hash);
+
+        const sig = EcdsaP256Sha256.Signature.fromDer(sig_raw[0..sig_len]) catch {
+            try request.respond("Invalid signature format", .{ .status = .bad_request });
+            return;
+        };
+
+        // DB ops outside lock
+        const row = qs.select_credential.run(@src(), db, .{
+            .cred_id = zqlite.blob(cred_id_raw[0..cred_id_len]),
+        });
+
+        if (row == null) {
+            try request.respond("Unknown credential", .{ .status = .bad_request });
+            return;
+        }
+
+        const cred_row = row.?;
+        defer cred_row.deinit();
+        const cred_db_id = cred_row.get(.id);
+        const sec1_blob = cred_row.textNoDupe(.public_key);
+
+        if (sec1_blob.len != 65) {
+            try request.respond("Corrupted credential", .{ .status = .internal_server_error });
+            return;
+        }
+
+        const pub_key = EcdsaP256Sha256.PublicKey.fromSec1(sec1_blob[0..65]) catch {
+            try request.respond("Corrupted credential key", .{ .status = .internal_server_error });
+            return;
+        };
+
+        sig.verify(signed_data[0 .. auth_data_len + 32], pub_key) catch {
+            try request.respond("Signature verification failed", .{ .status = .bad_request });
+            return;
+        };
+
+        // Consume challenge under lock (after successful signature verification)
+        {
+            auth.mutex.lockUncancelable(io);
+            defer auth.mutex.unlock(io);
+
+            if (!auth.consumeChallenge(challenge_raw, Io.Timestamp.now(io, .real))) {
+                try request.respond("Unknown challenge", .{ .status = .bad_request });
+                return;
+            }
+        }
+
+        // Generate session token and insert
+        var token: [16]u8 = undefined;
+        io.random(&token);
+
+        qs.insert_session.run(@src(), db, .{
+            .token = zqlite.blob(&token),
+            .credential = cred_db_id,
+        });
+
+        const token_hex = std.fmt.bytesToHex(token, .lower);
+        var cookie_buf: [128]u8 = undefined;
+        const secure_suffix: []const u8 = if (auth.config.secure_cookie) "; Secure" else "";
+        const cookie = std.fmt.bufPrint(&cookie_buf, "session={s}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000{s}", .{ token_hex, secure_suffix }) catch unreachable;
+
+        log.info("Login successful, session created", .{});
+
+        try request.respond("{\"ok\":true}", .{
+            .extra_headers = &.{
+                .{ .name = "content-type", .value = "application/json" },
+                .{ .name = "set-cookie", .value = cookie },
+            },
+        });
+    }
+
+    pub fn handleLogout(ctx: Ctx, request: *std.http.Server.Request, _: Io) !void {
+        const token = parseSessionToken(request);
+        if (token) |t| {
+            ctx.qs.delete_session.run(@src(), ctx.db, .{
+                .token = zqlite.blob(&t),
+            });
+        }
+
+        try request.respond("", .{
+            .status = .see_other,
+            .extra_headers = &.{
+                .{ .name = "location", .value = "/" },
+                .{ .name = "set-cookie", .value = "session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0" },
+            },
+        });
+    }
+
+    pub fn getSession(ctx: Ctx, request: *std.http.Server.Request) ?i64 {
+        if (ctx.auth.config.debug_bypass) return 1;
+
+        const token = parseSessionToken(request) orelse return null;
+
+        const row = ctx.qs.select_session.run(@src(), ctx.db, .{
+            .token = zqlite.blob(&token),
+        });
+        if (row) |r| {
+            defer r.deinit();
+            return r.get(.credential);
+        }
+        return null;
+    }
+};
 
 fn isExpired(timestamp: Io.Timestamp, now: Io.Timestamp) bool {
     return timestamp.durationTo(now).nanoseconds > challenge_timeout.nanoseconds;

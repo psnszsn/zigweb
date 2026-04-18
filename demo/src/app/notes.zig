@@ -32,6 +32,7 @@ pub fn list(h: Html) !void {
         defer h.close(.ul);
 
         var rows = h.app.qs.list_notes.run(@src(), h.app.db.*, .{ .credential = credential });
+        defer rows.deinit();
         while (rows.next()) |row| {
             try h.open(.li, .{});
             defer h.close(.li);
@@ -41,7 +42,8 @@ pub fn list(h: Html) !void {
 }
 
 pub fn handleAdd(request: *std.http.Server.Request, _: std.Io, app: *const App) !void {
-    const session = app.auth.getSession(request) orelse {
+    const auth_ctx: zigweb.Auth.Ctx = .{ .auth = app.auth, .db = app.db.*, .qs = app.auth_qs };
+    const session = auth_ctx.getSession(request) orelse {
         try zigweb.server.redirect(request, "/");
         return;
     };

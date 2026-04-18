@@ -13,7 +13,7 @@ pub fn build(b: *std.Build) void {
     const zqlite_dep = b.dependency("zqlite", .{
         .target = target,
         .optimize = optimize,
-        .sqlite3 =  sqlite3_cflags,
+        .sqlite3 = sqlite3_cflags,
     });
 
     // Library module (for consumption by other packages)

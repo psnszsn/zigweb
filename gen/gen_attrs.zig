@@ -11,14 +11,14 @@ const htmx_names: []const []const u8 = &.{
 };
 
 const tags: []const []const u8 = &.{
-    "html",   "head",   "title",   "meta",    "link",   "body",
-    "div",    "span",   "p",       "a",       "button", "input",
-    "br",     "hr",     "ul",      "ol",      "li",     "h1",
-    "h2",     "h3",     "section", "nav",     "header", "footer",
-    "main",   "form",   "label",   "table",   "tr",     "td",
-    "th",     "thead",  "tbody",   "script",  "img",    "textarea",
-    "select", "option", "time",    "article", "small",
-    "details", "summary",
+    "html",    "head",   "title",   "meta",    "link",   "body",
+    "div",     "span",   "p",       "a",       "button", "input",
+    "br",      "hr",     "ul",      "ol",      "li",     "h1",
+    "h2",      "h3",     "section", "nav",     "header", "footer",
+    "main",    "form",   "label",   "table",   "tr",     "td",
+    "th",      "thead",  "tbody",   "script",  "img",    "textarea",
+    "select",  "option", "time",    "article", "small",  "details",
+    "summary",
 };
 
 pub fn main(init: std.process.Init) void {

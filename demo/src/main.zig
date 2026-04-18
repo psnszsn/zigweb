@@ -15,6 +15,7 @@ pub const App = struct {
     auth: *zigweb.Auth,
     db: *Database,
     qs: *Queries,
+    auth_qs: *zigweb.Auth.Queries,
     etag: *const [18]u8,
 };
 
@@ -46,9 +47,10 @@ pub fn main(init: std.process.Init) !void {
         .rp_id = if (is_debug) "localhost" else "demo.example.com",
         .debug_bypass = bypass_login,
         .secure_cookie = !is_debug,
-    }, &db, &mutex);
+    }, &mutex);
 
     var qs = db.initQueries(Queries);
+    var auth_qs = db.initQueries(zigweb.Auth.Queries);
 
     if (bypass_login) {
         db.conn.exec("INSERT OR IGNORE INTO credentials (id, cred_id, public_key) VALUES (1, X'00', X'00')", .{}) catch {};
@@ -60,6 +62,7 @@ pub fn main(init: std.process.Init) !void {
         .auth = &auth,
         .db = &db,
         .qs = &qs,
+        .auth_qs = &auth_qs,
         .etag = &etag,
     };
 
@@ -126,29 +129,30 @@ fn serveRequest(request: *std.http.Server.Request, io: Io, web_dir: Io.Dir, app:
     }
 
     // Auth routes
+    const auth_ctx: zigweb.Auth.Ctx = .{ .auth = app.auth, .db = app.db.*, .qs = app.auth_qs };
     if (std.mem.eql(u8, target, "/auth/register-challenge")) {
-        try app.auth.handleRegisterChallenge(request, io);
+        try auth_ctx.handleRegisterChallenge(request, io);
         return;
     } else if (std.mem.eql(u8, target, "/auth/register")) {
-        try app.auth.handleRegister(request, io);
+        try auth_ctx.handleRegister(request, io);
         return;
     } else if (std.mem.eql(u8, target, "/auth/login-challenge")) {
-        try app.auth.handleLoginChallenge(request, io);
+        try auth_ctx.handleLoginChallenge(request, io);
         return;
     } else if (std.mem.eql(u8, target, "/auth/login")) {
-        try app.auth.handleLogin(request, io);
+        try auth_ctx.handleLogin(request, io);
         return;
     } else if (std.mem.eql(u8, target, "/auth/logout")) {
-        try app.auth.handleLogout(request, io);
+        try auth_ctx.handleLogout(request, io);
         return;
     }
 
     // App routes
     if (std.mem.eql(u8, target, "/")) {
-        const session = app.auth.getSession(request);
+        const session = auth_ctx.getSession(request);
         try servePage(request, home.home, session, io, app);
     } else if (std.mem.eql(u8, target, "/notes")) {
-        const session = app.auth.getSession(request);
+        const session = auth_ctx.getSession(request);
         if (session == null) {
             try zigweb.server.redirect(request, "/");
             return;

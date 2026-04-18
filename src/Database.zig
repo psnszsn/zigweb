@@ -21,11 +21,11 @@ pub fn open(db_path: [:0]const u8) Database {
     const db: Database = .{ .conn = conn };
 
     conn.execNoArgs(
-        \\PRAGMA locking_mode = EXCLUSIVE;
         \\PRAGMA foreign_keys = true;
         \\PRAGMA journal_mode = WAL;
         \\PRAGMA synchronous = NORMAL;
         \\PRAGMA temp_store = memory;
+        \\PRAGMA busy_timeout = 5000;
     ) catch db.fatal(@src());
 
     return db;
@@ -161,7 +161,10 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
                 .returning => @compileError("use .runReturning()"),
                 .row => {
                     const one_row = stmt.step() catch db.fatal(src);
-                    if (!one_row) return null;
+                    if (!one_row) {
+                        stmt.reset() catch db.fatal(src);
+                        return null;
+                    }
                     return Rows(config).Row{ .row = .{ .stmt = stmt } };
                 },
                 .rows => {
@@ -195,8 +198,20 @@ pub fn Rows(config: QueryConfig) type {
             return .{ .row = self.rows.next() orelse return null };
         }
 
+        /// Reset the underlying cached stmt so the read-transaction (WAL
+        /// snapshot) doesn't stay pinned past this query's scope.
+        pub fn deinit(self: *const @This()) void {
+            self.rows.stmt.reset() catch {};
+        }
+
         pub const Row = struct {
             row: zqlite.Row,
+
+            /// Reset the underlying cached stmt so the read-transaction (WAL
+            /// snapshot) doesn't stay pinned past this row's scope.
+            pub fn deinit(r: Row) void {
+                r.row.stmt.reset() catch {};
+            }
 
             pub fn get(r: Row, comptime col: std.meta.FieldEnum(config.cols)) ColType(col) {
                 const C = ColType(col);
