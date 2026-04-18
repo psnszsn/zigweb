@@ -22,11 +22,11 @@ pub const App = struct {
 pub const Queries = struct {
     list_notes: Database.Query(
         "SELECT id, content FROM notes WHERE credential = ? ORDER BY created DESC",
-        .{ .kind = .rows, .cols = struct { id: i64, content: void }, .args = struct { credential: i64 } },
+        .{ .kind = .rows, .cols = struct { id: i64, content: void }, .args = struct { i64 } },
     ),
     insert_note: Database.Query(
         "INSERT INTO notes (credential, content) VALUES (?, ?)",
-        .{ .kind = .exec, .args = struct { credential: i64, content: []const u8 } },
+        .{ .kind = .exec, .args = struct { i64, []const u8 } },
     ),
 };
 

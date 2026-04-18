@@ -183,8 +183,147 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
 
         fn bind(stmt: zqlite.Stmt, db: Database, args: config.args) void {
             stmt.reset() catch db.fatal(@src());
-            inline for (@typeInfo(config.args).@"struct".fields, 0..) |f, idx| {
-                stmt.bindValue(@field(args, f.name), idx) catch db.fatal(@src());
+            switch (parameterMode(stmt)) {
+                .positional => {
+                    if (!isTuple(config.args)) {
+                        std.debug.panic("positional ? SQL parameters require tuple args", .{});
+                    }
+                    inline for (@typeInfo(config.args).@"struct".fields, 0..) |f, idx| {
+                        bindArgValue(stmt, db, @field(args, f.name), idx);
+                    }
+                },
+                .named => {
+                    if (isTuple(config.args)) {
+                        std.debug.panic("named :name SQL parameters require struct args", .{});
+                    }
+                    validateNamedParameters(stmt, config.args);
+                    inline for (@typeInfo(config.args).@"struct".fields) |f| {
+                        const bound = bindNamedArg(stmt, db, f.name, @field(args, f.name));
+                        if (bound == 0) {
+                            std.debug.panic("named SQL parameter :{s} has no matching placeholder in query", .{f.name});
+                        }
+                    }
+                },
+            }
+        }
+
+        const ParameterMode = enum { positional, named };
+
+        fn isTuple(T: type) bool {
+            return switch (@typeInfo(T)) {
+                .@"struct" => |info| blk: {
+                    if (info.is_tuple) break :blk true;
+                    for (info.fields, 0..) |f, i| {
+                        const idx = std.fmt.parseInt(usize, f.name, 10) catch break :blk false;
+                        if (idx != i) break :blk false;
+                    }
+                    break :blk info.fields.len != 0 or @sizeOf(T) == 0;
+                },
+                else => false,
+            };
+        }
+
+        fn sqliteStmtPtr(stmt: zqlite.Stmt) ?*zqlite.c.sqlite3_stmt {
+            return @ptrCast(stmt.stmt);
+        }
+
+        fn parameterMode(stmt: zqlite.Stmt) ParameterMode {
+            const count = zqlite.c.sqlite3_bind_parameter_count(sqliteStmtPtr(stmt));
+            var has_named = false;
+            var has_positional = false;
+            var i: c_int = 1;
+            while (i <= count) : (i += 1) {
+                const name_z = zqlite.c.sqlite3_bind_parameter_name(sqliteStmtPtr(stmt), i);
+                if (name_z == null) {
+                    has_positional = true;
+                    continue;
+                }
+                const name = std.mem.span(name_z);
+                switch (name[0]) {
+                    ':' => has_named = true,
+                    '@', '$' => std.debug.panic("only :name SQL parameters are supported, found {s}", .{name}),
+                    '?' => has_positional = true,
+                    else => std.debug.panic("unsupported SQL parameter syntax: {s}", .{name}),
+                }
+            }
+            if (has_named and has_positional) {
+                std.debug.panic("cannot mix positional ? and named :name SQL parameters in one query", .{});
+            }
+            return if (has_named) .named else .positional;
+        }
+
+        fn validateNamedParameters(stmt: zqlite.Stmt, Args: type) void {
+            const count = zqlite.c.sqlite3_bind_parameter_count(sqliteStmtPtr(stmt));
+            var i: c_int = 1;
+            while (i <= count) : (i += 1) {
+                const name_z = zqlite.c.sqlite3_bind_parameter_name(sqliteStmtPtr(stmt), i) orelse continue;
+                const name = std.mem.span(name_z);
+                if (name.len < 2 or name[0] != ':') {
+                    std.debug.panic("only :name SQL parameters are supported, found {s}", .{name});
+                }
+                if (!hasArgField(Args, name[1..])) {
+                    std.debug.panic("named SQL parameter {s} has no matching arg field", .{name});
+                }
+            }
+        }
+
+        fn hasArgField(Args: type, name: []const u8) bool {
+            inline for (@typeInfo(Args).@"struct".fields) |f| {
+                if (std.mem.eql(u8, f.name, name)) return true;
+            }
+            return false;
+        }
+
+        fn bindNamedArg(stmt: zqlite.Stmt, db: Database, comptime field_name: []const u8, value: anytype) usize {
+            var parameter_name: [field_name.len + 2]u8 = undefined;
+            parameter_name[0] = ':';
+            @memcpy(parameter_name[1 .. 1 + field_name.len], field_name);
+            parameter_name[parameter_name.len - 1] = 0;
+
+            var bound: usize = 0;
+            const count = zqlite.c.sqlite3_bind_parameter_count(sqliteStmtPtr(stmt));
+            var i: c_int = 1;
+            while (i <= count) : (i += 1) {
+                const name_z = zqlite.c.sqlite3_bind_parameter_name(sqliteStmtPtr(stmt), i) orelse continue;
+                if (std.mem.eql(u8, std.mem.span(name_z), parameter_name[0 .. parameter_name.len - 1])) {
+                    bindArgValueAt(stmt, db, value, i);
+                    bound += 1;
+                }
+            }
+            return bound;
+        }
+
+        fn bindArgValue(stmt: zqlite.Stmt, db: Database, value: anytype, index: usize) void {
+            bindArgValueAt(stmt, db, value, @intCast(index + 1));
+        }
+
+        fn bindArgValueAt(stmt: zqlite.Stmt, db: Database, value: anytype, bind_index: c_int) void {
+            bindValueAs(@TypeOf(value), stmt, db, value, bind_index);
+        }
+
+        fn bindValueAs(comptime T: type, stmt: zqlite.Stmt, db: Database, value: T, bind_index: c_int) void {
+            switch (@typeInfo(T)) {
+                .@"enum" => stmt.bindValue(@intFromEnum(value), @intCast(bind_index - 1)) catch db.fatal(@src()),
+                .optional => |opt| switch (@typeInfo(opt.child)) {
+                    .@"enum" => {
+                        if (value) |v| {
+                            stmt.bindValue(@intFromEnum(v), @intCast(bind_index - 1)) catch db.fatal(@src());
+                        } else {
+                            stmt.bindValue(null, @intCast(bind_index - 1)) catch db.fatal(@src());
+                        }
+                    },
+                    else => stmt.bindValue(value, @intCast(bind_index - 1)) catch db.fatal(@src()),
+                },
+                .@"struct" => |info| {
+                    if (info.layout != .@"packed" or info.backing_integer == null) {
+                        stmt.bindValue(value, @intCast(bind_index - 1)) catch db.fatal(@src());
+                        return;
+                    }
+                    const Int = info.backing_integer.?;
+                    const int_value: Int = @bitCast(value);
+                    stmt.bindValue(int_value, @intCast(bind_index - 1)) catch db.fatal(@src());
+                },
+                else => stmt.bindValue(value, @intCast(bind_index - 1)) catch db.fatal(@src()),
             }
         }
     };
@@ -209,6 +348,13 @@ pub fn Rows(config: QueryConfig) type {
 
             /// Reset the underlying cached stmt so the read-transaction (WAL
             /// snapshot) doesn't stay pinned past this row's scope.
+            ///
+            /// Callers that do SELECT-then-write on the SAME connection must
+            /// narrow the `.row` scope (e.g. a block expression) so this
+            /// `deinit` fires BEFORE the subsequent write. Otherwise a
+            /// concurrent commit on another connection can invalidate the
+            /// snapshot and the write fails with SQLITE_BUSY_SNAPSHOT (517),
+            /// which `busy_timeout` does not retry.
             pub fn deinit(r: Row) void {
                 r.row.stmt.reset() catch {};
             }
@@ -259,4 +405,142 @@ pub fn Rows(config: QueryConfig) type {
             }
         };
     };
+}
+
+const t = std.testing;
+
+const Flavor = enum(i64) {
+    vanilla = 1,
+    chocolate = 2,
+};
+
+const PackedFlags = packed struct(u8) {
+    admin: bool,
+    editor: bool,
+    _: u6 = 0,
+};
+
+const BindingQueries = struct {
+    insert_positional: Query(
+        "INSERT INTO binding_test (id, flavor, maybe_flavor, flags, lo, hi) VALUES (?, ?, ?, ?, ?, ?)",
+        .{
+            .kind = .exec,
+            .args = struct {
+                i64,
+                Flavor,
+                ?Flavor,
+                PackedFlags,
+                i64,
+                i64,
+            },
+        },
+    ),
+    insert_named: Query(
+        "INSERT INTO binding_test (id, flavor, maybe_flavor, flags, lo, hi) VALUES (:id, :flavor, :maybe_flavor, :flags, :bound, :bound)",
+        .{
+            .kind = .exec,
+            .args = struct {
+                id: i64,
+                flavor: Flavor,
+                maybe_flavor: ?Flavor,
+                flags: PackedFlags,
+                bound: i64,
+            },
+        },
+    ),
+    select_row: Query(
+        "SELECT flavor, maybe_flavor, flags, lo, hi FROM binding_test WHERE id = ?",
+        .{
+            .kind = .row,
+            .cols = struct {
+                flavor: i64,
+                maybe_flavor: ?u64,
+                flags: i64,
+                lo: i64,
+                hi: i64,
+            },
+            .args = struct { i64 },
+        },
+    ),
+    select_named_row: Query(
+        "SELECT flavor, maybe_flavor, flags, lo, hi FROM binding_test WHERE id = :id",
+        .{
+            .kind = .row,
+            .cols = struct {
+                flavor: i64,
+                maybe_flavor: ?u64,
+                flags: i64,
+                lo: i64,
+                hi: i64,
+            },
+            .args = struct { id: i64 },
+        },
+    ),
+};
+
+fn openTestDb() Database {
+    const conn = zqlite.open(":memory:", zqlite.OpenFlags.Create | zqlite.OpenFlags.ReadWrite | zqlite.OpenFlags.EXResCode) catch
+        @panic("failed to open in-memory db");
+    conn.execNoArgs(
+        \\CREATE TABLE binding_test (
+        \\  id INTEGER PRIMARY KEY,
+        \\  flavor INTEGER NOT NULL,
+        \\  maybe_flavor INTEGER,
+        \\  flags INTEGER NOT NULL,
+        \\  lo INTEGER NOT NULL,
+        \\  hi INTEGER NOT NULL
+        \\)
+    ) catch @panic("failed to create binding_test");
+    return .{ .conn = conn };
+}
+
+test "Query positional binding handles enums optional enums and packed structs" {
+    const db = openTestDb();
+    defer db.close();
+
+    var qs = db.initQueries(BindingQueries);
+    defer db.deinitQueries(BindingQueries, &qs);
+
+    qs.insert_positional.run(@src(), db, .{
+        1,
+        .chocolate,
+        .vanilla,
+        .{ .admin = true, .editor = false },
+        10,
+        20,
+    });
+
+    const row = qs.select_row.run(@src(), db, .{1}).?;
+    defer row.deinit();
+
+    try t.expectEqual(@as(i64, 2), row.get(.flavor));
+    try t.expectEqual(@as(?u64, 1), row.get(.maybe_flavor));
+    try t.expectEqual(@as(i64, @bitCast(@as(PackedFlags, .{ .admin = true, .editor = false }))), row.get(.flags));
+    try t.expectEqual(@as(i64, 10), row.get(.lo));
+    try t.expectEqual(@as(i64, 20), row.get(.hi));
+}
+
+test "Query named :args bind by field and reuse repeated parameters" {
+    const db = openTestDb();
+    defer db.close();
+
+    var qs = db.initQueries(BindingQueries);
+    defer db.deinitQueries(BindingQueries, &qs);
+
+    qs.insert_named.run(@src(), db, .{
+        .id = 2,
+        .flavor = .vanilla,
+        .maybe_flavor = null,
+        .flags = .{ .admin = true, .editor = true },
+        .bound = 77,
+    });
+
+    const row = qs.select_named_row.run(@src(), db, .{ .id = 2 }).?;
+    defer row.deinit();
+
+    try t.expectEqual(@as(i64, 1), row.get(.flavor));
+    try t.expectEqual(@as(?u64, null), row.get(.maybe_flavor));
+    try t.expectEqual(@as(i64, @bitCast(@as(PackedFlags, .{ .admin = true, .editor = true }))), row.get(.flags));
+    try t.expectEqual(@as(i64, 77), row.get(.lo));
+    try t.expectEqual(@as(i64, 77), row.get(.hi));
 }

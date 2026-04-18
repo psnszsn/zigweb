@@ -36,23 +36,23 @@ const ChallengeList = std.ArrayList(PendingChallenge);
 pub const Queries = struct {
     insert_credential: Database.Query(
         "INSERT INTO credentials (cred_id, public_key) VALUES (?, ?)",
-        .{ .kind = .exec, .args = struct { cred_id: zqlite.Blob, public_key: zqlite.Blob } },
+        .{ .kind = .exec, .args = struct { zqlite.Blob, zqlite.Blob } },
     ),
     select_credential: Database.Query(
         "SELECT id, public_key FROM credentials WHERE cred_id = ?",
-        .{ .kind = .row, .cols = struct { id: i64, public_key: []const u8 }, .args = struct { cred_id: zqlite.Blob } },
+        .{ .kind = .row, .cols = struct { id: i64, public_key: []const u8 }, .args = struct { zqlite.Blob } },
     ),
     insert_session: Database.Query(
         "INSERT INTO sessions (token, credential) VALUES (?, ?)",
-        .{ .kind = .exec, .args = struct { token: zqlite.Blob, credential: i64 } },
+        .{ .kind = .exec, .args = struct { zqlite.Blob, i64 } },
     ),
     delete_session: Database.Query(
         "DELETE FROM sessions WHERE token = ?",
-        .{ .kind = .exec, .args = struct { token: zqlite.Blob } },
+        .{ .kind = .exec, .args = struct { zqlite.Blob } },
     ),
     select_session: Database.Query(
         "SELECT credential FROM sessions WHERE token = ?",
-        .{ .kind = .row, .cols = struct { credential: i64 }, .args = struct { token: zqlite.Blob } },
+        .{ .kind = .row, .cols = struct { credential: i64 }, .args = struct { zqlite.Blob } },
     ),
 };
 
@@ -253,8 +253,8 @@ pub const Ctx = struct {
 
         // DB ops outside lock
         qs.insert_credential.run(@src(), db, .{
-            .cred_id = zqlite.blob(cred_id_bytes),
-            .public_key = zqlite.blob(&sec1),
+            zqlite.blob(cred_id_bytes),
+            zqlite.blob(&sec1),
         });
 
         log.info("Registered credential ({} bytes)", .{cred_id_bytes.len});
@@ -445,7 +445,7 @@ pub const Ctx = struct {
 
         // DB ops outside lock
         const row = qs.select_credential.run(@src(), db, .{
-            .cred_id = zqlite.blob(cred_id_raw[0..cred_id_len]),
+            zqlite.blob(cred_id_raw[0..cred_id_len]),
         });
 
         if (row == null) {
@@ -489,8 +489,8 @@ pub const Ctx = struct {
         io.random(&token);
 
         qs.insert_session.run(@src(), db, .{
-            .token = zqlite.blob(&token),
-            .credential = cred_db_id,
+            zqlite.blob(&token),
+            cred_db_id,
         });
 
         const token_hex = std.fmt.bytesToHex(token, .lower);
@@ -512,7 +512,7 @@ pub const Ctx = struct {
         const token = parseSessionToken(request);
         if (token) |t| {
             ctx.qs.delete_session.run(@src(), ctx.db, .{
-                .token = zqlite.blob(&t),
+                zqlite.blob(&t),
             });
         }
 
@@ -531,7 +531,7 @@ pub const Ctx = struct {
         const token = parseSessionToken(request) orelse return null;
 
         const row = ctx.qs.select_session.run(@src(), ctx.db, .{
-            .token = zqlite.blob(&token),
+            zqlite.blob(&token),
         });
         if (row) |r| {
             defer r.deinit();

@@ -31,7 +31,7 @@ pub fn list(h: Html) !void {
         try h.open(.ul, .{});
         defer h.close(.ul);
 
-        var rows = h.app.qs.list_notes.run(@src(), h.app.db.*, .{ .credential = credential });
+        var rows = h.app.qs.list_notes.run(@src(), h.app.db.*, .{credential});
         defer rows.deinit();
         while (rows.next()) |row| {
             try h.open(.li, .{});
@@ -61,8 +61,8 @@ pub fn handleAdd(request: *std.http.Server.Request, _: std.Io, app: *const App) 
     };
 
     app.qs.insert_note.run(@src(), app.db.*, .{
-        .credential = session,
-        .content = content,
+        session,
+        content,
     });
 
     try zigweb.server.redirect(request, "/notes");
