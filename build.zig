@@ -33,14 +33,27 @@ pub fn build(b: *std.Build) void {
     b.step("check", "Check compilation").dependOn(&lib.step);
 
     // zig build test
-    const test_mod = b.createModule(.{
+    const migrate_test_mod = b.createModule(.{
         .root_source_file = b.path("src/Database/migrate_test.zig"),
         .target = target,
         .optimize = optimize,
     });
-    test_mod.addImport("zqlite", zqlite_dep.module("zqlite"));
+    migrate_test_mod.addImport("zqlite", zqlite_dep.module("zqlite"));
 
-    const tests = b.addTest(.{ .root_module = test_mod });
-    const run_tests = b.addRunArtifact(tests);
-    b.step("test", "Run tests").dependOn(&run_tests.step);
+    const migrate_tests = b.addTest(.{ .root_module = migrate_test_mod });
+    const run_migrate_tests = b.addRunArtifact(migrate_tests);
+
+    const query_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/Database/query_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    query_test_mod.addImport("zigweb", zigweb_mod);
+
+    const query_tests = b.addTest(.{ .root_module = query_test_mod });
+    const run_query_tests = b.addRunArtifact(query_tests);
+
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_migrate_tests.step);
+    test_step.dependOn(&run_query_tests.step);
 }

@@ -213,7 +213,7 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
             return switch (@typeInfo(T)) {
                 .@"struct" => |info| blk: {
                     if (info.is_tuple) break :blk true;
-                    for (info.fields, 0..) |f, i| {
+                    inline for (info.fields, 0..) |f, i| {
                         const idx = std.fmt.parseInt(usize, f.name, 10) catch break :blk false;
                         if (idx != i) break :blk false;
                     }
@@ -380,23 +380,37 @@ pub fn Rows(config: QueryConfig) type {
             }
 
             fn coerce(r: Row, T: type, idx: usize) T {
-                switch (T) {
-                    f64 => return r.row.float(idx),
-                    u32, u64, i64 => return @intCast(r.row.int(idx)),
-                    ?u64 => {
+                return switch (@typeInfo(T)) {
+                    .int => @intCast(r.row.int(idx)),
+                    .float => @floatCast(r.row.float(idx)),
+                    .bool => r.row.boolean(idx),
+                    .@"enum" => @enumFromInt(r.row.int(idx)),
+                    .optional => |opt| r.coerceOptional(opt.child, idx),
+                    .pointer => switch (T) {
+                        []u8, []const u8 => @compileError("use textNoDupe()"),
+                        else => @compileError("type " ++ @typeName(T) ++ " not supported"),
+                    },
+                    else => @compileError("type " ++ @typeName(T) ++ " not supported"),
+                };
+            }
+
+            fn coerceOptional(r: Row, Child: type, idx: usize) ?Child {
+                return switch (@typeInfo(Child)) {
+                    .int => {
                         const value = r.row.nullableInt(idx) orelse return null;
                         return @intCast(value);
                     },
-                    []u8, []const u8 => @compileError("use textNoDupe()"),
-                    bool => return r.row.boolean(idx),
-                    ?bool => return r.row.nullableBoolean(idx),
-                    else => switch (@typeInfo(T)) {
-                        .@"enum" => {
-                            return @enumFromInt(r.row.int(idx));
-                        },
-                        else => @compileError("type " ++ @typeName(T) ++ " not supported"),
+                    .float => {
+                        const value = r.row.nullableFloat(idx) orelse return null;
+                        return @floatCast(value);
                     },
-                }
+                    .bool => return r.row.nullableBoolean(idx),
+                    .@"enum" => {
+                        const value = r.row.nullableInt(idx) orelse return null;
+                        return @enumFromInt(value);
+                    },
+                    else => @compileError("type ?" ++ @typeName(Child) ++ " not supported"),
+                };
             }
 
             fn ColType(col: std.meta.FieldEnum(config.cols)) type {
@@ -405,142 +419,4 @@ pub fn Rows(config: QueryConfig) type {
             }
         };
     };
-}
-
-const t = std.testing;
-
-const Flavor = enum(i64) {
-    vanilla = 1,
-    chocolate = 2,
-};
-
-const PackedFlags = packed struct(u8) {
-    admin: bool,
-    editor: bool,
-    _: u6 = 0,
-};
-
-const BindingQueries = struct {
-    insert_positional: Query(
-        "INSERT INTO binding_test (id, flavor, maybe_flavor, flags, lo, hi) VALUES (?, ?, ?, ?, ?, ?)",
-        .{
-            .kind = .exec,
-            .args = struct {
-                i64,
-                Flavor,
-                ?Flavor,
-                PackedFlags,
-                i64,
-                i64,
-            },
-        },
-    ),
-    insert_named: Query(
-        "INSERT INTO binding_test (id, flavor, maybe_flavor, flags, lo, hi) VALUES (:id, :flavor, :maybe_flavor, :flags, :bound, :bound)",
-        .{
-            .kind = .exec,
-            .args = struct {
-                id: i64,
-                flavor: Flavor,
-                maybe_flavor: ?Flavor,
-                flags: PackedFlags,
-                bound: i64,
-            },
-        },
-    ),
-    select_row: Query(
-        "SELECT flavor, maybe_flavor, flags, lo, hi FROM binding_test WHERE id = ?",
-        .{
-            .kind = .row,
-            .cols = struct {
-                flavor: i64,
-                maybe_flavor: ?u64,
-                flags: i64,
-                lo: i64,
-                hi: i64,
-            },
-            .args = struct { i64 },
-        },
-    ),
-    select_named_row: Query(
-        "SELECT flavor, maybe_flavor, flags, lo, hi FROM binding_test WHERE id = :id",
-        .{
-            .kind = .row,
-            .cols = struct {
-                flavor: i64,
-                maybe_flavor: ?u64,
-                flags: i64,
-                lo: i64,
-                hi: i64,
-            },
-            .args = struct { id: i64 },
-        },
-    ),
-};
-
-fn openTestDb() Database {
-    const conn = zqlite.open(":memory:", zqlite.OpenFlags.Create | zqlite.OpenFlags.ReadWrite | zqlite.OpenFlags.EXResCode) catch
-        @panic("failed to open in-memory db");
-    conn.execNoArgs(
-        \\CREATE TABLE binding_test (
-        \\  id INTEGER PRIMARY KEY,
-        \\  flavor INTEGER NOT NULL,
-        \\  maybe_flavor INTEGER,
-        \\  flags INTEGER NOT NULL,
-        \\  lo INTEGER NOT NULL,
-        \\  hi INTEGER NOT NULL
-        \\)
-    ) catch @panic("failed to create binding_test");
-    return .{ .conn = conn };
-}
-
-test "Query positional binding handles enums optional enums and packed structs" {
-    const db = openTestDb();
-    defer db.close();
-
-    var qs = db.initQueries(BindingQueries);
-    defer db.deinitQueries(BindingQueries, &qs);
-
-    qs.insert_positional.run(@src(), db, .{
-        1,
-        .chocolate,
-        .vanilla,
-        .{ .admin = true, .editor = false },
-        10,
-        20,
-    });
-
-    const row = qs.select_row.run(@src(), db, .{1}).?;
-    defer row.deinit();
-
-    try t.expectEqual(@as(i64, 2), row.get(.flavor));
-    try t.expectEqual(@as(?u64, 1), row.get(.maybe_flavor));
-    try t.expectEqual(@as(i64, @bitCast(@as(PackedFlags, .{ .admin = true, .editor = false }))), row.get(.flags));
-    try t.expectEqual(@as(i64, 10), row.get(.lo));
-    try t.expectEqual(@as(i64, 20), row.get(.hi));
-}
-
-test "Query named :args bind by field and reuse repeated parameters" {
-    const db = openTestDb();
-    defer db.close();
-
-    var qs = db.initQueries(BindingQueries);
-    defer db.deinitQueries(BindingQueries, &qs);
-
-    qs.insert_named.run(@src(), db, .{
-        .id = 2,
-        .flavor = .vanilla,
-        .maybe_flavor = null,
-        .flags = .{ .admin = true, .editor = true },
-        .bound = 77,
-    });
-
-    const row = qs.select_named_row.run(@src(), db, .{ .id = 2 }).?;
-    defer row.deinit();
-
-    try t.expectEqual(@as(i64, 1), row.get(.flavor));
-    try t.expectEqual(@as(?u64, null), row.get(.maybe_flavor));
-    try t.expectEqual(@as(i64, @bitCast(@as(PackedFlags, .{ .admin = true, .editor = true }))), row.get(.flags));
-    try t.expectEqual(@as(i64, 77), row.get(.lo));
-    try t.expectEqual(@as(i64, 77), row.get(.hi));
 }
