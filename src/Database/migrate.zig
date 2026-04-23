@@ -81,6 +81,14 @@ pub fn migrateSchema(comptime Tables: type, gpa: Allocator, conn: zqlite.Conn) !
         }
     }
 
+    // Fetched up-front so the table-rebuild loop can filter out dependents
+    // the pristine schema no longer declares (e.g. an index on a column
+    // being dropped). Trying to recreate such a dependent after the rebuild
+    // fails because the columns it referenced are gone; the INDEXES /
+    // TRIGGERS phases below would drop them anyway.
+    const pristine_indexes = try getSchemaEntries(arena, pristine, "index");
+    const pristine_triggers = try getSchemaEntries(arena, pristine, "trigger");
+
     for (tables_to_migrate[0..migrate_count]) |entry| {
         const table_name = entry.name;
         const pristine_sql = entry.sql;
@@ -145,14 +153,22 @@ pub fn migrateSchema(comptime Tables: type, gpa: Allocator, conn: zqlite.Conn) !
             }, 0);
             conn.execNoArgs(rename_query) catch return error.MigrateFailed;
 
-            // Step 8: Recreate indexes, triggers, and views
+            // Step 8: Recreate indexes, triggers, and views.
+            // Skip dependents the pristine schema no longer declares —
+            // they're about to be dropped by the INDEXES / TRIGGERS phase
+            // below and may reference columns that no longer exist. Views
+            // aren't managed via a dedicated phase, so recreate them
+            // unconditionally.
             for (dependents) |dep| {
+                if (std.mem.eql(u8, dep.dep_type, "index") and !pristine_indexes.contains(dep.name)) continue;
+                if (std.mem.eql(u8, dep.dep_type, "trigger") and !pristine_triggers.contains(dep.name)) continue;
                 conn.execNoArgs(dep.sql) catch |err| {
                     log.err("failed to recreate {s} '{s}': {}", .{ dep.dep_type, dep.name, err });
                     return error.MigrateFailed;
                 };
             }
             for (all_triggers) |trig| {
+                if (!pristine_triggers.contains(trig.name)) continue;
                 conn.execNoArgs(trig.sql) catch |err| {
                     log.err("failed to recreate trigger '{s}': {}", .{ trig.name, err });
                     return error.MigrateFailed;
@@ -175,7 +191,6 @@ pub fn migrateSchema(comptime Tables: type, gpa: Allocator, conn: zqlite.Conn) !
     // ====================================
     // INDEXES
     // ====================================
-    const pristine_indexes = try getSchemaEntries(arena, pristine, "index");
     const db_indexes = try getSchemaEntries(arena, conn, "index");
 
     for (pristine_indexes.keys(), pristine_indexes.values()) |name, sql| {
@@ -197,7 +212,6 @@ pub fn migrateSchema(comptime Tables: type, gpa: Allocator, conn: zqlite.Conn) !
     // ====================================
     // TRIGGERS
     // ====================================
-    const pristine_triggers = try getSchemaEntries(arena, pristine, "trigger");
     const db_triggers = try getSchemaEntries(arena, conn, "trigger");
 
     for (pristine_triggers.keys(), pristine_triggers.values()) |name, sql| {
