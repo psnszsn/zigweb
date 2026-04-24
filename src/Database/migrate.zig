@@ -75,7 +75,9 @@ pub fn migrateSchema(comptime Tables: type, gpa: Allocator, conn: zqlite.Conn) !
         if (!db_tables.contains(table_name)) continue;
         const pi = try tableInfo(arena, pristine, table_name);
         const di = try tableInfo(arena, conn, table_name);
-        if (!tableInfoEql(&pi, &di)) {
+        const pfks = try foreignKeyList(arena, pristine, table_name);
+        const dfks = try foreignKeyList(arena, conn, table_name);
+        if (!tableInfoEql(&pi, &di) or !foreignKeyListEql(pfks, dfks)) {
             tables_to_migrate[migrate_count] = .{ .name = table_name, .sql = pristine_sql };
             migrate_count += 1;
         }
@@ -250,6 +252,14 @@ const Dependent = struct {
     sql: [:0]const u8,
 };
 
+const ForeignKey = struct {
+    table: []const u8,
+    from: []const u8,
+    to: []const u8,
+    on_update: []const u8,
+    on_delete: []const u8,
+};
+
 // -- Schema introspection --
 
 fn getTables(arena: Allocator, conn: zqlite.Conn) !StringMap {
@@ -362,6 +372,42 @@ fn getAllTriggersReferencing(arena: Allocator, conn: zqlite.Conn, table_name: []
 }
 
 // -- Comparison helpers --
+
+fn foreignKeyList(arena: Allocator, conn: zqlite.Conn, table_name: []const u8) ![]ForeignKey {
+    var buf: [256]u8 = undefined;
+    const query = std.fmt.bufPrint(&buf, "PRAGMA foreign_key_list({s})", .{table_name}) catch return error.BufOverflow;
+
+    var rows = try conn.rows(query, .{});
+    defer rows.deinit();
+
+    var list: std.ArrayList(ForeignKey) = .empty;
+    while (rows.next()) |row| {
+        try list.append(arena, .{
+            .table = try arena.dupe(u8, row.text(2)),
+            .from = try arena.dupe(u8, row.text(3)),
+            .to = try arena.dupe(u8, row.text(4)),
+            .on_update = try arena.dupe(u8, row.text(5)),
+            .on_delete = try arena.dupe(u8, row.text(6)),
+        });
+    }
+    if (rows.err) |err| return err;
+    return try list.toOwnedSlice(arena);
+}
+
+fn foreignKeyListEql(lhs: []const ForeignKey, rhs: []const ForeignKey) bool {
+    if (lhs.len != rhs.len) return false;
+    // PRAGMA foreign_key_list returns FKs in a stable order (by declaration
+    // position). A rebuild preserves that order, so positional comparison
+    // is sufficient for migrations authored in the normal way.
+    for (lhs, rhs) |l, r| {
+        if (!std.mem.eql(u8, l.table, r.table)) return false;
+        if (!std.mem.eql(u8, l.from, r.from)) return false;
+        if (!std.mem.eql(u8, l.to, r.to)) return false;
+        if (!std.mem.eql(u8, l.on_update, r.on_update)) return false;
+        if (!std.mem.eql(u8, l.on_delete, r.on_delete)) return false;
+    }
+    return true;
+}
 
 fn tableInfoEql(lhs: *const TableInfo, rhs: *const TableInfo) bool {
     if (lhs.count() != rhs.count()) return false;
