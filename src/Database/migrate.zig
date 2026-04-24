@@ -125,9 +125,19 @@ pub fn migrateSchema(comptime Tables: type, gpa: Allocator, conn: zqlite.Conn) !
             // Also collect triggers that reference this table but belong to other tables
             const all_triggers = try getAllTriggersReferencing(arena, conn, table_name);
 
-            // Drop cross-table triggers before modifying the table
+            // Views that reference this table are separate schema objects
+            // (sqlite_schema.tbl_name is the view's own name), so they
+            // don't come back from getDependents. If we leave them in
+            // place the step-7 rename would try to rewrite the view's
+            // SQL against the dropped original and fail. Drop now,
+            // recreate verbatim after the rename.
+            const referencing_views = try getAllViewsReferencing(arena, conn, table_name);
+
+            // Drop cross-table triggers and referencing views before modifying the table
             for (all_triggers) |trig|
                 try dropEntry(conn, "TRIGGER", trig.name);
+            for (referencing_views) |view|
+                try dropEntry(conn, "VIEW", view.name);
 
             // Step 4: Create new_X with desired schema
             const sql: []const u8 = pristine_sql;
@@ -173,6 +183,16 @@ pub fn migrateSchema(comptime Tables: type, gpa: Allocator, conn: zqlite.Conn) !
                 if (!pristine_triggers.contains(trig.name)) continue;
                 conn.execNoArgs(trig.sql) catch |err| {
                     log.err("failed to recreate trigger '{s}': {}", .{ trig.name, err });
+                    return error.MigrateFailed;
+                };
+            }
+            // Views aren't schema-owned by any table here (they often live
+            // in app bootstrap code, created at runtime), so we always
+            // recreate what we dropped rather than cross-checking against
+            // a pristine list.
+            for (referencing_views) |view| {
+                conn.execNoArgs(view.sql) catch |err| {
+                    log.err("failed to recreate view '{s}': {}", .{ view.name, err });
                     return error.MigrateFailed;
                 };
             }
@@ -362,6 +382,32 @@ fn getAllTriggersReferencing(arena: Allocator, conn: zqlite.Conn, table_name: []
         if (std.mem.find(u8, sql, table_name) != null) {
             try list.append(arena, .{
                 .dep_type = "trigger",
+                .name = try arena.dupe(u8, row.text(0)),
+                .sql = try arena.dupeZ(u8, row.text(1)),
+            });
+        }
+    }
+    if (rows.err) |err| return err;
+    return try list.toOwnedSlice(arena);
+}
+
+/// Find all views whose body references a table name. For views,
+/// sqlite_schema.tbl_name is the view's own name (not the underlying
+/// table), so a simple tbl_name match wouldn't find them. We substring-
+/// match against the SQL body, mirroring getAllTriggersReferencing.
+fn getAllViewsReferencing(arena: Allocator, conn: zqlite.Conn, table_name: []const u8) ![]Dependent {
+    var rows = try conn.rows(
+        \\SELECT name, sql FROM sqlite_schema
+        \\WHERE type = 'view' AND sql IS NOT NULL
+    , .{});
+    defer rows.deinit();
+
+    var list: std.ArrayList(Dependent) = .empty;
+    while (rows.next()) |row| {
+        const sql = try arena.dupe(u8, row.text(1));
+        if (std.mem.find(u8, sql, table_name) != null) {
+            try list.append(arena, .{
+                .dep_type = "view",
                 .name = try arena.dupe(u8, row.text(0)),
                 .sql = try arena.dupeZ(u8, row.text(1)),
             });
