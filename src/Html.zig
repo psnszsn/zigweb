@@ -73,11 +73,7 @@ pub const Tag = enum {
 pub fn open(h: *Html, comptime tag: Tag, attrs: tag.Attrs()) !void {
     try h.writer.print("<{s}", .{tag.str()});
     try writeAttrs(h.writer, attrs);
-    if (tag.isVoid()) {
-        try h.writer.writeAll(" />");
-    } else {
-        try h.writer.writeAll(">");
-    }
+    try h.writer.writeAll(">");
 }
 
 fn writeAttrs(w: *Writer, attrs: anytype) !void {
