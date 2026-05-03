@@ -379,6 +379,10 @@ pub fn Rows(config: QueryConfig) type {
                 return r.row.text(@intFromEnum(col));
             }
 
+            pub fn text(r: Row, allocator: std.mem.Allocator, col: std.meta.FieldEnum(config.cols)) ![]u8 {
+                return allocator.dupe(u8, r.row.text(@intFromEnum(col)));
+            }
+
             fn coerce(r: Row, T: type, idx: usize) T {
                 return switch (@typeInfo(T)) {
                     .int => @intCast(r.row.int(idx)),
