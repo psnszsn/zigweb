@@ -4,6 +4,8 @@ const Writer = std.Io.Writer;
 const generated_attrs = @import("generated_attrs.zig");
 
 writer: *Writer,
+scratch: [4096]u8 = undefined,
+scratch_used: usize = 0,
 
 // -- Tag enum --
 
@@ -74,6 +76,17 @@ pub fn open(h: *Html, comptime tag: Tag, attrs: tag.Attrs()) !void {
     try h.writer.print("<{s}", .{tag.str()});
     try writeAttrs(h.writer, attrs);
     try h.writer.writeAll(">");
+    h.scratch_used = 0;
+}
+
+/// Format into an internal scratch buffer and return a slice into
+/// it. The slice stays valid until the next `h.open(...)` call,
+/// which resets the buffer. Intended for computing strings to pass
+/// as `h.open` attribute values.
+pub fn print(h: *Html, comptime fmt: []const u8, args: anytype) ![]const u8 {
+    const s = try std.fmt.bufPrint(h.scratch[h.scratch_used..], fmt, args);
+    h.scratch_used += s.len;
+    return s;
 }
 
 fn writeAttrs(w: *Writer, attrs: anytype) !void {
