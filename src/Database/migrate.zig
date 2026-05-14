@@ -73,11 +73,17 @@ pub fn migrateSchema(comptime Tables: type, gpa: Allocator, conn: zqlite.Conn) !
 
     for (pristine_tables.keys(), pristine_tables.values()) |table_name, pristine_sql| {
         if (!db_tables.contains(table_name)) continue;
+        // Virtual tables already drop-and-recreate above on SQL mismatch.
+        if (std.mem.startsWith(u8, pristine_sql, "CREATE VIRTUAL TABLE")) continue;
         const pi = try tableInfo(arena, pristine, table_name);
         const di = try tableInfo(arena, conn, table_name);
         const pfks = try foreignKeyList(arena, pristine, table_name);
         const dfks = try foreignKeyList(arena, conn, table_name);
-        if (!tableInfoEql(&pi, &di) or !foreignKeyListEql(pfks, dfks)) {
+        const cols_eq = tableInfoEql(&pi, &di);
+        const fks_eq = foreignKeyListEql(pfks, dfks);
+        const body_eq = cols_eq and fks_eq and
+            tableBodyEql(pristine_sql, db_tables.get(table_name).?);
+        if (!cols_eq or !fks_eq or !body_eq) {
             tables_to_migrate[migrate_count] = .{ .name = table_name, .sql = pristine_sql };
             migrate_count += 1;
         }
@@ -474,6 +480,60 @@ fn tableInfoEntryEql(lhs: *const TableInfoEntry, rhs: *const TableInfoEntry) boo
     const rdv = rhs.default_value orelse return false;
     return std.mem.eql(u8, ldv, rdv);
 }
+
+/// Whether two CREATE TABLE statements have the same body — the column
+/// definitions, table constraints, and any trailing modifiers like
+/// WITHOUT ROWID / STRICT. Streams both through a tokenizer starting at
+/// the first `(`, ignoring whitespace between tokens. Skipping to `(`
+/// sidesteps the cosmetic differences SQLite introduces in the prefix:
+/// the schematab docs note that stored SQL is normalized (CREATE/TABLE
+/// uppercased) and `ALTER TABLE ... RENAME` re-quotes the table name on
+/// storage. PRAGMA table_info / foreign_key_list don't expose CHECK
+/// clauses, UNIQUE table constraints, or composite PRIMARY KEY — this
+/// fills that gap.
+fn tableBodyEql(lhs_sql: []const u8, rhs_sql: []const u8) bool {
+    var l: SqlTokens = .{ .sql = lhs_sql };
+    var r: SqlTokens = .{ .sql = rhs_sql };
+    if (!l.skipToBody() or !r.skipToBody()) return false;
+    while (true) {
+        const lt = l.next();
+        const rt = r.next();
+        if (lt == null and rt == null) return true;
+        if (lt == null or rt == null) return false;
+        if (!std.mem.eql(u8, lt.?, rt.?)) return false;
+    }
+}
+
+/// Minimal SQL tokenizer: word runs ([A-Za-z0-9_]+) and single-char
+/// punctuation are each one token; whitespace is the separator.
+/// Sufficient for comparing CREATE TABLE bodies side-by-side.
+const SqlTokens = struct {
+    sql: []const u8,
+    i: usize = 0,
+
+    fn skipToBody(self: *SqlTokens) bool {
+        while (self.next()) |tok| {
+            if (tok.len == 1 and tok[0] == '(') return true;
+        }
+        return false;
+    }
+
+    fn next(self: *SqlTokens) ?[]const u8 {
+        while (self.i < self.sql.len and std.ascii.isWhitespace(self.sql[self.i])) self.i += 1;
+        if (self.i >= self.sql.len) return null;
+        const start = self.i;
+        const c = self.sql[self.i];
+        if (std.ascii.isAlphanumeric(c) or c == '_') {
+            while (self.i < self.sql.len) : (self.i += 1) {
+                const ch = self.sql[self.i];
+                if (!std.ascii.isAlphanumeric(ch) and ch != '_') break;
+            }
+        } else {
+            self.i += 1;
+        }
+        return self.sql[start..self.i];
+    }
+};
 
 fn setIntersection(arena: Allocator, lhs: *const TableInfo, rhs: *const TableInfo) !StringSet {
     var ret: StringSet = .{};
