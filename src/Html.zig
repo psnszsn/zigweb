@@ -78,6 +78,10 @@ pub fn open(h: *Html, comptime tag: Tag, attrs: tag.Attrs()) !void {
 
 fn writeAttrs(w: *Writer, attrs: anytype) !void {
     inline for (@typeInfo(@TypeOf(attrs)).@"struct".fields) |f| {
+        if (comptime std.mem.eql(u8, f.name, "hx")) {
+            try writeHxAttrs(w, @field(attrs, f.name));
+            continue;
+        }
         if (@field(attrs, f.name)) |val| {
             if (@TypeOf(val) == bool) {
                 if (val) try w.print(" {s}", .{f.name});
@@ -86,6 +90,21 @@ fn writeAttrs(w: *Writer, attrs: anytype) !void {
                 try escapeAttr(w, val);
                 try w.writeAll("\"");
             }
+        }
+    }
+}
+
+fn writeHxAttrs(w: *Writer, hx: generated_attrs.Hx) !void {
+    inline for (@typeInfo(generated_attrs.Hx).@"struct".fields) |f| {
+        if (@field(hx, f.name)) |val| {
+            const wire = comptime blk: {
+                var arr: [3 + f.name.len]u8 = ("hx-" ++ f.name).*;
+                std.mem.replaceScalar(u8, &arr, '_', '-');
+                break :blk arr;
+            };
+            try w.print(" {s}=\"", .{&wire});
+            try escapeAttr(w, val);
+            try w.writeAll("\"");
         }
     }
 }
