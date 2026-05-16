@@ -102,9 +102,7 @@ fn renderTableBody(self: Table, h: *Html) !void {
     if (!any) {
         try h.open(.tr, .{});
         defer h.close(.tr);
-        var buf: [8]u8 = undefined;
-        const colspan = std.fmt.bufPrint(&buf, "{d}", .{self.columns.len}) catch "1";
-        try h.open(.td, .{ .colspan = colspan });
+        try h.open(.td, .{ .colspan = try h.fmt("{d}", .{self.columns.len}) });
         defer h.close(.td);
         try h.text("No results");
     }
@@ -543,6 +541,11 @@ pub fn renderOneFilterPill(
     for (spec, 0..) |f, i| {
         if (std.mem.eql(u8, f.key, key)) {
             try renderFilterPill(h, base_path, table_id, spec, values, page, size, i);
+            try h.open(.span, .{
+                .id = try h.fmt("add-filter-menu-{s}-{s}", .{ table_id, f.key }),
+                .hx = .{ .swap_oob = "delete" },
+            });
+            h.close(.span);
             return;
         }
     }
@@ -731,10 +734,8 @@ fn renderPillPopover(
             });
             defer h.close(.form);
 
-            var input_id_buf: [128]u8 = undefined;
-            const input_id = std.fmt.bufPrint(&input_id_buf, "filter-input-{s}-{s}", .{ hash_target[1..], f.key }) catch f.key;
             try h.open(.input, .{
-                .id = input_id,
+                .id = try h.fmt("filter-input-{s}-{s}", .{ hash_target[1..], f.key }),
                 .hx = .{ .preserve = "true" },
                 .type = "search",
                 .name = f.key,
@@ -757,18 +758,14 @@ fn renderPillPopover(
             });
             defer h.close(.form);
 
-            var name_buf: [128]u8 = undefined;
-            const from_name = std.fmt.bufPrint(&name_buf, "{s}_from", .{f.key}) catch f.key;
             try h.open(.input, .{
                 .type = "date",
-                .name = from_name,
+                .name = try h.fmt("{s}_from", .{f.key}),
                 .value = v.date_range.from orelse "",
             });
-            var name_buf2: [128]u8 = undefined;
-            const to_name = std.fmt.bufPrint(&name_buf2, "{s}_to", .{f.key}) catch f.key;
             try h.open(.input, .{
                 .type = "date",
-                .name = to_name,
+                .name = try h.fmt("{s}_to", .{f.key}),
                 .value = v.date_range.to orelse "",
             });
             try renderHiddenFilterInputs(h, spec, values, f.key);
@@ -782,9 +779,7 @@ fn renderPillPopover(
 
 fn renderHiddenPagination(h: *Html, size: usize) !void {
     try h.open(.input, .{ .type = "hidden", .name = "page", .value = "1" });
-    var buf: [16]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "{d}", .{size}) catch return;
-    try h.open(.input, .{ .type = "hidden", .name = "size", .value = s });
+    try h.open(.input, .{ .type = "hidden", .name = "size", .value = try h.fmt("{d}", .{size}) });
 }
 
 fn renderHiddenFilterInputs(
@@ -807,14 +802,18 @@ fn renderHiddenFilterInputs(
             },
             .date_range => {
                 if (v.date_range.from) |s| if (s.len > 0) {
-                    var name_buf: [128]u8 = undefined;
-                    const fname = std.fmt.bufPrint(&name_buf, "{s}_from", .{f.key}) catch f.key;
-                    try h.open(.input, .{ .type = "hidden", .name = fname, .value = s });
+                    try h.open(.input, .{
+                        .type = "hidden",
+                        .name = try h.fmt("{s}_from", .{f.key}),
+                        .value = s,
+                    });
                 };
                 if (v.date_range.to) |s| if (s.len > 0) {
-                    var name_buf: [128]u8 = undefined;
-                    const fname = std.fmt.bufPrint(&name_buf, "{s}_to", .{f.key}) catch f.key;
-                    try h.open(.input, .{ .type = "hidden", .name = fname, .value = s });
+                    try h.open(.input, .{
+                        .type = "hidden",
+                        .name = try h.fmt("{s}_to", .{f.key}),
+                        .value = s,
+                    });
                 };
             },
         }
@@ -936,9 +935,9 @@ pub fn renderAddFilter(
 
     for (spec, values[0..spec.len]) |f, v| {
         if (!filterVisible(f, v)) {
-            var url_buf: [768]u8 = undefined;
-            const url = std.fmt.bufPrint(&url_buf, "{s}/add-pill/{s}{s}", .{ base_path, f.key, qs }) catch base_path;
+            const url = try h.fmt("{s}/add-pill/{s}{s}", .{ base_path, f.key, qs });
             try h.open(.a, .{
+                .id = try h.fmt("add-filter-menu-{s}-{s}", .{ table_id, f.key }),
                 .class = "menu-item",
                 .href = url,
                 .hx = .{
