@@ -21,7 +21,7 @@ pub fn forRows(
     comptime QueryT: type,
     comptime renderCellFn: fn (QueryT.Row, std.meta.FieldEnum(QueryT.Cols), *Html) anyerror!void,
     comptime rowIdFn: ?fn (buf: []u8, row: QueryT.Row) []const u8,
-    rows: *Database.Rows(QueryT.cfg),
+    rows: anytype,
     opts: struct {
         base_path: []const u8,
         table_id: []const u8,
@@ -32,7 +32,7 @@ pub fn forRows(
         columns: []const ColumnSpec,
     },
 ) Table {
-    const Iter = Database.Rows(QueryT.cfg);
+    const Iter = @typeInfo(@TypeOf(rows)).pointer.child;
     const Field = std.meta.FieldEnum(QueryT.Cols);
     const adapter = struct {
         fn next(ctx: *anyopaque, out: *zqlite.Row) bool {
