@@ -95,6 +95,8 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
 
         pub const cfg = config;
         pub const sql = sql_query;
+        pub const Cols = config.cols;
+        pub const Row = Rows(config).Row;
 
         fn init(db: Database) !@This() {
             const prep = try db.conn.prepare(sql_query);

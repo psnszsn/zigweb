@@ -15,6 +15,7 @@
     .paths = .{
         "src",
         "web",
+        "demo",
         "build.zig",
         "build.zig.zon",
     },

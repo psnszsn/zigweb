@@ -15,6 +15,8 @@ pub const notes: Table = .{
     \\  id          INTEGER PRIMARY KEY,
     \\  credential  INTEGER NOT NULL REFERENCES credentials(id),
     \\  content     TEXT NOT NULL DEFAULT '',
+    \\  status      TEXT NOT NULL DEFAULT 'open',
+    \\  category    TEXT NOT NULL DEFAULT 'general',
     \\  created     INTEGER NOT NULL DEFAULT (unixepoch())
     \\);
     ,

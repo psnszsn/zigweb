@@ -53,7 +53,48 @@ pub fn build(b: *std.Build) void {
     const query_tests = b.addTest(.{ .root_module = query_test_mod });
     const run_query_tests = b.addRunArtifact(query_tests);
 
+    const table_tests = b.addTest(.{ .root_module = zigweb_mod });
+    const run_table_tests = b.addRunArtifact(table_tests);
+
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_migrate_tests.step);
     test_step.dependOn(&run_query_tests.step);
+    test_step.dependOn(&run_table_tests.step);
+
+    // zig build demo / run-demo
+    buildDemo(b, target, optimize, zigweb_mod);
+}
+
+fn buildDemo(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zigweb_mod: *std.Build.Module,
+) void {
+    const options = b.addOptions();
+    options.addOption(bool, "bypass_login", b.option(bool, "bypass_login", "Bypass login for development") orelse false);
+
+    const demo_mod = b.createModule(.{
+        .root_source_file = b.path("demo/src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    demo_mod.addOptions("build_options", options);
+    demo_mod.addImport("zigweb", zigweb_mod);
+
+    const demo_exe = b.addExecutable(.{
+        .name = "demo",
+        .root_module = demo_mod,
+    });
+
+    // Install demo artifacts under their own step so plain `zig build`
+    // doesn't drag the demo into the default install.
+    const demo_step = b.step("demo", "Build the demo server");
+    demo_step.dependOn(&b.addInstallArtifact(demo_exe, .{}).step);
+    demo_step.dependOn(&b.addInstallFileWithDir(b.path("demo/web/style.css"), .prefix, "web/style.css").step);
+    demo_step.dependOn(&b.addInstallFileWithDir(b.path("web/auth.js"), .prefix, "web/auth.js").step);
+
+    const run = b.addRunArtifact(demo_exe);
+    run.step.dependOn(demo_step);
+    b.step("run-demo", "Start the demo server").dependOn(&run.step);
 }

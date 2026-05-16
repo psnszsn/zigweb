@@ -83,8 +83,8 @@ pub fn open(h: *Html, comptime tag: Tag, attrs: tag.Attrs()) !void {
 /// it. The slice stays valid until the next `h.open(...)` call,
 /// which resets the buffer. Intended for computing strings to pass
 /// as `h.open` attribute values.
-pub fn print(h: *Html, comptime fmt: []const u8, args: anytype) ![]const u8 {
-    const s = try std.fmt.bufPrint(h.scratch[h.scratch_used..], fmt, args);
+pub fn fmt(h: *Html, comptime f: []const u8, args: anytype) ![]const u8 {
+    const s = try std.fmt.bufPrint(h.scratch[h.scratch_used..], f, args);
     h.scratch_used += s.len;
     return s;
 }
@@ -137,6 +137,27 @@ pub fn raw(h: *Html, s: []const u8) !void {
     try h.writer.writeAll(s);
 }
 
+/// Format with HTML escaping (no intermediate buffer).
+pub fn print(h: *Html, comptime f: []const u8, args: anytype) !void {
+    var esc: EscapingWriter = .{ .out = h.writer };
+    try esc.writer.print(f, args);
+}
+
+const EscapingWriter = struct {
+    out: *Writer,
+    writer: Writer = .{
+        .buffer = &.{},
+        .vtable = &.{ .drain = drain },
+    },
+
+    fn drain(w: *Writer, data: []const []const u8, splat: usize) Writer.Error!usize {
+        const self: *EscapingWriter = @alignCast(@fieldParentPtr("writer", w));
+        for (data[0 .. data.len - 1]) |chunk| try escapeText(self.out, chunk);
+        for (0..splat) |_| try escapeText(self.out, data[data.len - 1]);
+        return Writer.countSplat(data, splat);
+    }
+};
+
 // -- Escaping --
 
 fn escapeText(w: *Writer, s: []const u8) !void {
@@ -148,6 +169,14 @@ fn escapeText(w: *Writer, s: []const u8) !void {
             else => try w.writeByte(c),
         }
     }
+}
+
+test "print escapes formatted values" {
+    var buf: [128]u8 = undefined;
+    var out = Writer.fixed(&buf);
+    var h: Html = .{ .writer = &out };
+    try h.print("name={s} count={d}", .{ "<a&b>", 42 });
+    try std.testing.expectEqualStrings("name=&lt;a&amp;b&gt; count=42", out.buffered());
 }
 
 fn escapeAttr(w: *Writer, s: []const u8) !void {

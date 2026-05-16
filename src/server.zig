@@ -1,7 +1,50 @@
 const std = @import("std");
 const Io = std.Io;
+const Html = @import("Html.zig");
 
 const log = std.log.scoped(.server);
+
+/// Full-page HTML. `Vary: Cookie` because the body depends on session.
+pub const html_page_headers: std.http.Server.Request.RespondOptions = .{
+    .extra_headers = &.{
+        .{ .name = "content-type", .value = "text/html; charset=utf-8" },
+        .{ .name = "cache-control", .value = "no-store, no-cache, must-revalidate" },
+        .{ .name = "pragma", .value = "no-cache" },
+        .{ .name = "vary", .value = "Cookie" },
+    },
+};
+
+/// HTMX partial swap response.
+pub const html_partial_headers: std.http.Server.Request.RespondOptions = .{
+    .extra_headers = &.{
+        .{ .name = "content-type", .value = "text/html; charset=utf-8" },
+        .{ .name = "cache-control", .value = "no-store" },
+    },
+};
+
+/// Streaming HTML response with an owned write buffer. Self-referential
+/// (`body_writer.writer.buffer` aliases `self.buffer`), so MUST be
+/// initialized in place via `init(&self, ...)`.
+pub const Response = struct {
+    buffer: [8192]u8 = undefined,
+    body_writer: std.http.BodyWriter = undefined,
+
+    pub fn init(
+        self: *Response,
+        request: *std.http.Server.Request,
+        options: std.http.Server.Request.RespondStreamingOptions,
+    ) !void {
+        self.body_writer = try request.respondStreaming(&self.buffer, options);
+    }
+
+    pub fn html(self: *Response) Html {
+        return .{ .writer = &self.body_writer.writer };
+    }
+
+    pub fn end(self: *Response) !void {
+        return self.body_writer.end();
+    }
+};
 
 /// Generate an etag value from random bytes.
 /// Returns a quoted 16-character hex string suitable for HTTP ETag headers.

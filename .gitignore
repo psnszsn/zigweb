@@ -2,6 +2,6 @@
 .direnv
 zig-out
 zig-pkg
-progsys.db*
-progsys.pid
+demo.db*
 result
+

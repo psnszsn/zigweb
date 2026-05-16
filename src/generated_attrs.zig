@@ -18,6 +18,7 @@ pub const Hx = struct {
     sync: ?[]const u8 = null,
     boost: ?[]const u8 = null,
     disabled_elt: ?[]const u8 = null,
+    preserve: ?[]const u8 = null,
 };
 
 pub const html = struct {

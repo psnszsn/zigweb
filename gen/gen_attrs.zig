@@ -7,7 +7,7 @@ const htmx_fields: []const []const u8 = &.{
     "get",      "post",      "put",       "delete",       "patch",
     "trigger",  "target",    "swap",      "swap_oob",     "include",
     "select",   "confirm",   "push_url",  "vals",         "sync",
-    "boost",    "disabled_elt",
+    "boost",    "disabled_elt", "preserve",
 };
 
 const tags: []const []const u8 = &.{

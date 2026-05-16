@@ -24,9 +24,37 @@ pub const Html = struct {
     pub fn raw(h: Html, s: []const u8) !void {
         try h.inner.raw(s);
     }
+
+    pub fn print(h: Html, comptime fmt: []const u8, args: anytype) !void {
+        try h.inner.print(fmt, args);
+    }
 };
 
 pub fn renderPage(inner: *zigweb.Html, comptime page: fn (Html) anyerror!void, session: ?i64, io: Io, app: *const App) !void {
+    try renderChrome(inner, session, io, app, page, void, {});
+}
+
+pub fn renderPageWith(
+    comptime Arg: type,
+    inner: *zigweb.Html,
+    comptime page: fn (Html, Arg) anyerror!void,
+    arg: Arg,
+    session: ?i64,
+    io: Io,
+    app: *const App,
+) !void {
+    try renderChrome(inner, session, io, app, page, Arg, arg);
+}
+
+fn renderChrome(
+    inner: *zigweb.Html,
+    session: ?i64,
+    io: Io,
+    app: *const App,
+    comptime page: anytype,
+    comptime Arg: type,
+    arg: Arg,
+) !void {
     const h: Html = .{ .inner = inner, .app = app, .io = io, .session = session };
 
     try h.raw("<!DOCTYPE html>");
@@ -72,9 +100,17 @@ pub fn renderPage(inner: *zigweb.Html, comptime page: fn (Html) anyerror!void, s
         {
             try h.open(.main, .{});
             defer h.close(.main);
-            try page(h);
+            if (Arg == void) {
+                try page(h);
+            } else {
+                try page(h, arg);
+            }
         }
 
+        {
+            try h.open(.script, .{ .src = "https://unpkg.com/htmx.org@1.9.12" });
+            h.close(.script);
+        }
         {
             try h.open(.script, .{ .src = "/auth.js" });
             h.close(.script);

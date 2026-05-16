@@ -8,6 +8,7 @@ const root = @import("app/root.zig");
 const home = @import("app/home.zig");
 const notes = @import("app/notes.zig");
 const tables = @import("tables.zig");
+const Queries = @import("Queries.zig");
 
 const log = std.log.scoped(.server);
 
@@ -17,17 +18,6 @@ pub const App = struct {
     qs: *Queries,
     auth_qs: *zigweb.Auth.Queries,
     etag: *const [18]u8,
-};
-
-pub const Queries = struct {
-    list_notes: Database.Query(
-        "SELECT id, content FROM notes WHERE credential = ? ORDER BY created DESC",
-        .{ .kind = .rows, .cols = struct { id: i64, content: void }, .args = struct { i64 } },
-    ),
-    insert_note: Database.Query(
-        "INSERT INTO notes (credential, content) VALUES (?, ?)",
-        .{ .kind = .exec, .args = struct { i64, []const u8 } },
-    ),
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -116,69 +106,60 @@ fn accept(io: Io, stream: net.Stream, web_dir: Io.Dir, app: *const App) void {
     }
 }
 
+/// Parsed view of `request.head.target`. The raw form is `<path>[?<query>]`;
+/// most handlers want the two halves separately.
+pub const Target = struct {
+    raw: []const u8,
+    path: []const u8,
+    query: []const u8,
+
+    pub fn parse(raw: []const u8) Target {
+        const q = std.mem.indexOfScalar(u8, raw, '?');
+        return .{
+            .raw = raw,
+            .path = if (q) |i| raw[0..i] else raw,
+            .query = if (q) |i| raw[i + 1 ..] else "",
+        };
+    }
+};
+
 fn serveRequest(request: *std.http.Server.Request, io: Io, web_dir: Io.Dir, app: *const App) !void {
-    const target = request.head.target;
-
-    // Static files
-    if (std.mem.eql(u8, target, "/style.css")) {
-        try zigweb.server.serveFile(request, io, web_dir, "style.css", "text/css; charset=utf-8", app.etag);
-        return;
-    } else if (std.mem.eql(u8, target, "/auth.js")) {
-        try zigweb.server.serveFile(request, io, web_dir, "auth.js", "application/javascript; charset=utf-8", app.etag);
-        return;
-    }
-
-    // Auth routes
+    const t = Target.parse(request.head.target);
     const auth_ctx: zigweb.Auth.Ctx = .{ .auth = app.auth, .db = app.db.*, .qs = app.auth_qs };
-    if (std.mem.eql(u8, target, "/auth/register-challenge")) {
-        try auth_ctx.handleRegisterChallenge(request, io);
-        return;
-    } else if (std.mem.eql(u8, target, "/auth/register")) {
-        try auth_ctx.handleRegister(request, io);
-        return;
-    } else if (std.mem.eql(u8, target, "/auth/login-challenge")) {
-        try auth_ctx.handleLoginChallenge(request, io);
-        return;
-    } else if (std.mem.eql(u8, target, "/auth/login")) {
-        try auth_ctx.handleLogin(request, io);
-        return;
-    } else if (std.mem.eql(u8, target, "/auth/logout")) {
-        try auth_ctx.handleLogout(request, io);
-        return;
+
+    // ── Public routes ────────────────────────────────────────────────
+    switch (request.head.method) {
+        .GET => {
+            if (std.mem.eql(u8, t.path, "/style.css")) return zigweb.server.serveFile(request, io, web_dir, "style.css", "text/css; charset=utf-8", app.etag);
+            if (std.mem.eql(u8, t.path, "/auth.js")) return zigweb.server.serveFile(request, io, web_dir, "auth.js", "application/javascript; charset=utf-8", app.etag);
+            if (std.mem.eql(u8, t.path, "/auth/register-challenge")) return auth_ctx.handleRegisterChallenge(request, io);
+            if (std.mem.eql(u8, t.path, "/auth/login-challenge")) return auth_ctx.handleLoginChallenge(request, io);
+            if (std.mem.eql(u8, t.path, "/")) return servePage(request, home.home, auth_ctx.getSession(request), io, app);
+        },
+        .POST => {
+            if (std.mem.eql(u8, t.path, "/auth/register")) return auth_ctx.handleRegister(request, io);
+            if (std.mem.eql(u8, t.path, "/auth/login")) return auth_ctx.handleLogin(request, io);
+            if (std.mem.eql(u8, t.path, "/auth/logout")) return auth_ctx.handleLogout(request, io);
+        },
+        else => {},
     }
 
-    // App routes
-    if (std.mem.eql(u8, target, "/")) {
-        const session = auth_ctx.getSession(request);
-        try servePage(request, home.home, session, io, app);
-    } else if (std.mem.eql(u8, target, "/notes")) {
-        const session = auth_ctx.getSession(request);
-        if (session == null) {
-            try zigweb.server.redirect(request, "/");
-            return;
-        }
-        try servePage(request, notes.list, session, io, app);
-    } else if (std.mem.eql(u8, target, "/notes/add")) {
-        try notes.handleAdd(request, io, app);
-    } else {
-        try zigweb.server.notFound(request);
+    // ── Auth gate ────────────────────────────────────────────────────
+    const session = auth_ctx.getSession(request) orelse {
+        return zigweb.server.redirect(request, "/");
+    };
+
+    // ── Authenticated routes ─────────────────────────────────────────
+    if (std.mem.startsWith(u8, t.path, "/notes")) {
+        return notes.handle_request(request, io, app, session, t);
     }
+    return zigweb.server.notFound(request);
 }
 
 fn servePage(request: *std.http.Server.Request, comptime page: fn (root.Html) anyerror!void, session: ?i64, io: Io, app: *const App) !void {
-    var write_buf: [8192]u8 = undefined;
-    var body_writer = try request.respondStreaming(&write_buf, .{
-        .respond_options = .{
-            .extra_headers = &.{
-                .{ .name = "content-type", .value = "text/html; charset=utf-8" },
-                .{ .name = "cache-control", .value = "no-store, no-cache, must-revalidate" },
-                .{ .name = "pragma", .value = "no-cache" },
-                .{ .name = "vary", .value = "Cookie" },
-            },
-        },
-    });
-
-    var inner: zigweb.Html = .{ .writer = &body_writer.writer };
-    try root.renderPage(&inner, page, session, io, app);
-    try body_writer.end();
+    var resp: zigweb.server.Response = .{};
+    try resp.init(request, .{ .respond_options = zigweb.server.html_page_headers });
+    var h = resp.html();
+    try root.renderPage(&h, page, session, io, app);
+    try resp.end();
 }

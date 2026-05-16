@@ -301,7 +301,7 @@ fn getTables(arena: Allocator, conn: zqlite.Conn) !StringMap {
     var ret: StringMap = .{};
     while (rows.next()) |row| {
         const name = try arena.dupe(u8, row.text(0));
-        const sql = try arena.dupeZ(u8, row.text(1));
+        const sql = try arena.dupeSentinel(u8, row.text(1), 0);
         try ret.put(arena, name, sql);
     }
     if (rows.err) |err| return err;
@@ -322,7 +322,7 @@ fn getSchemaEntries(arena: Allocator, conn: zqlite.Conn, schema_type: []const u8
     var ret: StringMap = .{};
     while (rows.next()) |row| {
         const name = try arena.dupe(u8, row.text(0));
-        const sql = try arena.dupeZ(u8, row.text(1));
+        const sql = try arena.dupeSentinel(u8, row.text(1), 0);
         try ret.put(arena, name, sql);
     }
     if (rows.err) |err| return err;
@@ -365,7 +365,7 @@ fn getDependents(arena: Allocator, conn: zqlite.Conn, table_name: []const u8) ![
         try list.append(arena, .{
             .dep_type = try arena.dupe(u8, row.text(0)),
             .name = try arena.dupe(u8, row.text(1)),
-            .sql = try arena.dupeZ(u8, row.text(2)),
+            .sql = try arena.dupeSentinel(u8, row.text(2), 0),
         });
     }
     if (rows.err) |err| return err;
@@ -389,7 +389,7 @@ fn getAllTriggersReferencing(arena: Allocator, conn: zqlite.Conn, table_name: []
             try list.append(arena, .{
                 .dep_type = "trigger",
                 .name = try arena.dupe(u8, row.text(0)),
-                .sql = try arena.dupeZ(u8, row.text(1)),
+                .sql = try arena.dupeSentinel(u8, row.text(1), 0),
             });
         }
     }
@@ -415,7 +415,7 @@ fn getAllViewsReferencing(arena: Allocator, conn: zqlite.Conn, table_name: []con
             try list.append(arena, .{
                 .dep_type = "view",
                 .name = try arena.dupe(u8, row.text(0)),
-                .sql = try arena.dupeZ(u8, row.text(1)),
+                .sql = try arena.dupeSentinel(u8, row.text(1), 0),
             });
         }
     }
@@ -547,12 +547,12 @@ fn setIntersection(arena: Allocator, lhs: *const TableInfo, rhs: *const TableInf
 
 fn dropTable(conn: zqlite.Conn, name: []const u8) !void {
     var buf: [256]u8 = undefined;
-    const sql = std.fmt.bufPrintZ(&buf, "DROP TABLE {s}", .{name}) catch return error.BufOverflow;
+    const sql = std.fmt.bufPrintSentinel(&buf, "DROP TABLE {s}", .{name}, 0) catch return error.BufOverflow;
     try conn.execNoArgs(sql);
 }
 
 fn dropEntry(conn: zqlite.Conn, kind: []const u8, name: []const u8) !void {
     var buf: [256]u8 = undefined;
-    const sql = std.fmt.bufPrintZ(&buf, "DROP {s} {s}", .{ kind, name }) catch return error.BufOverflow;
+    const sql = std.fmt.bufPrintSentinel(&buf, "DROP {s} {s}", .{ kind, name }, 0) catch return error.BufOverflow;
     try conn.execNoArgs(sql);
 }
