@@ -13,10 +13,14 @@ columns: []const ColumnSpec,
 rows_ctx: *anyopaque,
 next_row: *const fn (rows_ctx: *anyopaque, out: *zqlite.Row) bool,
 render_cell: *const fn (row: *zqlite.Row, column: []const u8, h: *Html) anyerror!void,
+/// Set via the `rowIdFn` arg to `forRows` to emit `<tr id="…">` for
+/// htmx-targeted partial swaps. Returned slice must alias `buf`.
+row_id_fn: ?*const fn (buf: []u8, row: *zqlite.Row) []const u8 = null,
 
 pub fn forRows(
     comptime QueryT: type,
-    comptime renderCellFn: fn (QueryT.Row, []const u8, *Html) anyerror!void,
+    comptime renderCellFn: fn (QueryT.Row, std.meta.FieldEnum(QueryT.Cols), *Html) anyerror!void,
+    comptime rowIdFn: ?fn (buf: []u8, row: QueryT.Row) []const u8,
     rows: *Database.Rows(QueryT.cfg),
     opts: struct {
         base_path: []const u8,
@@ -29,6 +33,7 @@ pub fn forRows(
     },
 ) Table {
     const Iter = Database.Rows(QueryT.cfg);
+    const Field = std.meta.FieldEnum(QueryT.Cols);
     const adapter = struct {
         fn next(ctx: *anyopaque, out: *zqlite.Row) bool {
             const it: *Iter = @ptrCast(@alignCast(ctx));
@@ -38,7 +43,12 @@ pub fn forRows(
         }
         fn cell(slot: *zqlite.Row, column: []const u8, h: *Html) anyerror!void {
             const r: QueryT.Row = .{ .row = slot.* };
-            try renderCellFn(r, column, h);
+            const field = std.meta.stringToEnum(Field, column) orelse return error.UnknownColumn;
+            try renderCellFn(r, field, h);
+        }
+        fn rid(buf: []u8, slot: *zqlite.Row) []const u8 {
+            const r: QueryT.Row = .{ .row = slot.* };
+            return rowIdFn.?(buf, r);
         }
     };
     return .{
@@ -52,6 +62,7 @@ pub fn forRows(
         .rows_ctx = rows,
         .next_row = adapter.next,
         .render_cell = adapter.cell,
+        .row_id_fn = if (rowIdFn != null) adapter.rid else null,
     };
 }
 
@@ -90,7 +101,12 @@ fn renderTableBody(self: Table, h: *Html) !void {
     var any: bool = false;
     while (self.next_row(self.rows_ctx, &slot)) {
         any = true;
-        try h.open(.tr, .{});
+        if (self.row_id_fn) |rid_fn| {
+            var rid_buf: [64]u8 = undefined;
+            try h.open(.tr, .{ .id = rid_fn(&rid_buf, &slot) });
+        } else {
+            try h.open(.tr, .{});
+        }
         defer h.close(.tr);
         for (self.columns) |col| {
             try h.open(.td, .{});

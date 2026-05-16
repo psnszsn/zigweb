@@ -106,37 +106,39 @@ const notes_columns: []const Table.ColumnSpec = &.{
     .{ .name = "id", .header = "" },
 };
 
-fn renderNotesCell(row: NotesQuery.Row, column: []const u8, h: *zigweb.Html) anyerror!void {
-    if (std.mem.eql(u8, column, "content")) {
-        try h.text(row.textNoDupe(.content));
-    } else if (std.mem.eql(u8, column, "status")) {
-        try h.open(.span, .{ .class = "badge" });
-        defer h.close(.span);
-        try h.text(row.textNoDupe(.status));
-    } else if (std.mem.eql(u8, column, "category")) {
-        try h.text(row.textNoDupe(.category));
-    } else if (std.mem.eql(u8, column, "created")) {
-        const ts = row.get(.created);
-        const epoch = std.time.epoch.EpochSeconds{ .secs = @intCast(ts) };
-        const ymd = epoch.getEpochDay().calculateYearDay();
-        const md = ymd.calculateMonthDay();
-        try h.print("{d:0>4}-{d:0>2}-{d:0>2}", .{ ymd.year, @intFromEnum(md.month), md.day_index + 1 });
-    } else if (std.mem.eql(u8, column, "id")) {
-        const id = row.get(.id);
-        var post_buf: [64]u8 = undefined;
-        const post_url = std.fmt.bufPrint(&post_buf, "/notes/{d}/toggle", .{id}) catch return;
-        try h.open(.button, .{
-            .class = "btn",
-            .hx = .{
-                .post = post_url,
-                .target = "#notes-table",
-                .swap = "outerHTML",
-                .include = "closest #notes-table",
-            },
-            .title = "Toggle done",
-        });
-        defer h.close(.button);
-        try h.text("✓");
+fn renderNotesCell(row: NotesQuery.Row, field: std.meta.FieldEnum(NotesQuery.Cols), h: *zigweb.Html) anyerror!void {
+    switch (field) {
+        .content => try h.text(row.textNoDupe(.content)),
+        .status => {
+            try h.open(.span, .{ .class = "badge" });
+            defer h.close(.span);
+            try h.text(row.textNoDupe(.status));
+        },
+        .category => try h.text(row.textNoDupe(.category)),
+        .created => {
+            const ts = row.get(.created);
+            const epoch = std.time.epoch.EpochSeconds{ .secs = @intCast(ts) };
+            const ymd = epoch.getEpochDay().calculateYearDay();
+            const md = ymd.calculateMonthDay();
+            try h.print("{d:0>4}-{d:0>2}-{d:0>2}", .{ ymd.year, @intFromEnum(md.month), md.day_index + 1 });
+        },
+        .id => {
+            const id = row.get(.id);
+            var post_buf: [64]u8 = undefined;
+            const post_url = std.fmt.bufPrint(&post_buf, "/notes/{d}/toggle", .{id}) catch return;
+            try h.open(.button, .{
+                .class = "btn",
+                .hx = .{
+                    .post = post_url,
+                    .target = "#notes-table",
+                    .swap = "outerHTML",
+                    .include = "closest #notes-table",
+                },
+                .title = "Toggle done",
+            });
+            defer h.close(.button);
+            try h.text("✓");
+        },
     }
 }
 
@@ -174,7 +176,7 @@ pub fn renderTableRegion(h: Html, qp: QueryParams) !void {
 
     const filter_values = qp.filterValues();
 
-    const spec = Table.forRows(NotesQuery, renderNotesCell, &rows, .{
+    const spec = Table.forRows(NotesQuery, renderNotesCell, null, &rows, .{
         .base_path = "/notes",
         .table_id = "notes-table",
         .filters_spec = filters_spec,
