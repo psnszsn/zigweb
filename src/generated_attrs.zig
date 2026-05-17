@@ -14,6 +14,7 @@ pub const Hx = struct {
     select: ?[]const u8 = null,
     confirm: ?[]const u8 = null,
     push_url: ?[]const u8 = null,
+    replace_url: ?[]const u8 = null,
     vals: ?[]const u8 = null,
     sync: ?[]const u8 = null,
     boost: ?[]const u8 = null,

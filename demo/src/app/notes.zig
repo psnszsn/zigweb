@@ -17,7 +17,7 @@ pub const QueryParams = struct {
         return .{
             .{ .choice = qp.status },
             .{ .choice = qp.category },
-            .{ .text = qp.q },
+            .{ .text_dropdown = qp.q },
             .{ .date_range = .{ .from = qp.created_from, .to = qp.created_to } },
         };
     }
@@ -48,7 +48,7 @@ pub const filters_spec: []const Table.FilterSpec = &.{
         .key = "q",
         .label = "Search",
         .pinned = false,
-        .kind = .{ .text = .{ .placeholder = "Search content…" } },
+        .kind = .{ .text_dropdown = .{ .placeholder = "Search content…" } },
     },
     .{
         .key = "created",
@@ -227,7 +227,7 @@ pub fn handle_request(
             if (std.mem.startsWith(u8, t.path, "/notes/") and std.mem.endsWith(u8, t.path, "/toggle")) {
                 const id_str = t.path["/notes/".len .. t.path.len - "/toggle".len];
                 const id = std.fmt.parseInt(i64, id_str, 10) catch return zigweb.server.notFound(request);
-                app.qs.toggle_note_status.run(@src(), app.db.*, .{ session, id });
+                try app.qs.toggle_note_status.run(@src(), app.db.*, .{ session, id });
                 return renderRegion(request, app, session, qp);
             }
         },
@@ -285,7 +285,7 @@ fn handleAdd(request: *std.http.Server.Request, app: *const App, session: i64) !
     }
 
     const category: []const u8 = if (category_seen) category_w.buffered() else "general";
-    app.qs.insert_note.run(@src(), app.db.*, .{ session, content_w.buffered(), category });
+    try app.qs.insert_note.run(@src(), app.db.*, .{ session, content_w.buffered(), category });
     try zigweb.server.redirect(request, "/notes");
 }
 

@@ -138,14 +138,16 @@ pub const ChoiceOption = struct {
 
 /// Shared tag set for `FilterKind` and `FilterValue` — same variant
 /// names so a switch on the kind matches a switch on the value.
-pub const FilterTag = enum { choice, text, tribool, date_range };
+pub const FilterTag = enum { choice, text_dropdown, search, tribool, date_range };
 
 pub const FilterKind = union(FilterTag) {
     choice: struct {
         options: []const ChoiceOption,
         multi: bool = false,
     },
-    text: struct { placeholder: []const u8 = "Search…" },
+    text_dropdown: struct { placeholder: []const u8 = "Search…" },
+    /// Inline input — no dropdown, renders as a flush search bar.
+    search: struct { placeholder: []const u8 = "Search…" },
     tribool: struct {
         yes_label: []const u8 = "Yes",
         no_label: []const u8 = "No",
@@ -169,7 +171,8 @@ pub const FilterSpec = struct {
 /// slice the same length as the spec.
 pub const FilterValue = union(FilterTag) {
     choice: ?[]const u8, // CSV (`"open,done"`); null = not set
-    text: ?[]const u8,
+    text_dropdown: ?[]const u8,
+    search: ?[]const u8,
     tribool: ?bool,
     date_range: DateRange,
 
@@ -181,7 +184,8 @@ pub const FilterValue = union(FilterTag) {
     pub fn empty(kind: FilterKind) FilterValue {
         return switch (kind) {
             .choice => .{ .choice = null },
-            .text => .{ .text = null },
+            .text_dropdown => .{ .text_dropdown = null },
+            .search => .{ .search = null },
             .tribool => .{ .tribool = null },
             .date_range => .{ .date_range = .{} },
         };
@@ -316,7 +320,8 @@ pub fn parseFilterValues(
 
             switch (f.kind) {
                 .choice => v.* = .{ .choice = if (decoded.len == 0) null else decoded },
-                .text => v.* = .{ .text = if (decoded.len == 0) null else decoded },
+                .text_dropdown => v.* = .{ .text_dropdown = if (decoded.len == 0) null else decoded },
+                .search => v.* = .{ .search = if (decoded.len == 0) null else decoded },
                 .tribool => {
                     if (std.mem.eql(u8, decoded, "true") or std.mem.eql(u8, decoded, "1")) {
                         v.* = .{ .tribool = true };
@@ -384,8 +389,20 @@ pub fn buildUrlFromSpec(
                 };
                 writeFilterParam(&w, &sep, base_path, buf.len, f, new_value) orelse return overflow(base_path, buf.len);
             },
-            .text => {
-                const cur = v.text;
+            .text_dropdown => {
+                const cur = v.text_dropdown;
+                const new_value: ?[]const u8 = blk: {
+                    switch (override) {
+                        .clear_filter => |cf| if (std.mem.eql(u8, cf.key, f.key)) break :blk null,
+                        .set_filter => |sf| if (std.mem.eql(u8, sf.key, f.key)) break :blk sf.value,
+                        else => {},
+                    }
+                    break :blk cur;
+                };
+                writeFilterParam(&w, &sep, base_path, buf.len, f, new_value) orelse return overflow(base_path, buf.len);
+            },
+            .search => {
+                const cur = v.search;
                 const new_value: ?[]const u8 = blk: {
                     switch (override) {
                         .clear_filter => |cf| if (std.mem.eql(u8, cf.key, f.key)) break :blk null,
@@ -497,8 +514,14 @@ fn filterSelected(f: FilterSpec, v: FilterValue) bool {
             if (f.default_value) |dv| if (std.mem.eql(u8, s, dv)) break :blk false;
             break :blk true;
         },
-        .text => blk: {
-            const s = v.text orelse break :blk false;
+        .text_dropdown => blk: {
+            const s = v.text_dropdown orelse break :blk false;
+            if (s.len == 0) break :blk false;
+            if (f.default_value) |dv| if (std.mem.eql(u8, s, dv)) break :blk false;
+            break :blk true;
+        },
+        .search => blk: {
+            const s = v.search orelse break :blk false;
             if (s.len == 0) break :blk false;
             if (f.default_value) |dv| if (std.mem.eql(u8, s, dv)) break :blk false;
             break :blk true;
@@ -580,6 +603,11 @@ fn renderFilterPill(
     const f = spec[idx];
     const v = values[idx];
 
+    if (f.kind == .search) {
+        try renderSearchPill(h, base_path, table_id, spec, values, size, idx);
+        return;
+    }
+
     var hash_buf: [64]u8 = undefined;
     const hash_target = std.fmt.bufPrint(&hash_buf, "#{s}", .{table_id}) catch table_id;
 
@@ -623,6 +651,43 @@ fn renderFilterPill(
     }
 }
 
+fn renderSearchPill(
+    h: *Html,
+    base_path: []const u8,
+    table_id: []const u8,
+    spec: []const FilterSpec,
+    values: []const FilterValue,
+    size: usize,
+    idx: usize,
+) !void {
+    const f = spec[idx];
+    const v = values[idx];
+    const sx = f.kind.search;
+
+    var hash_buf: [64]u8 = undefined;
+    const hash_target = std.fmt.bufPrint(&hash_buf, "#{s}", .{table_id}) catch table_id;
+
+    try h.open(.form, .{
+        .class = "filter-pill search-pill",
+        .hx = .{
+            .get = base_path,
+            .target = hash_target,
+            .swap = "outerHTML",
+            .push_url = "true",
+        },
+    });
+    defer h.close(.form);
+
+    try h.open(.input, .{
+        .type = "search",
+        .name = f.key,
+        .value = v.search orelse "",
+        .placeholder = sx.placeholder,
+    });
+    try renderHiddenFilterInputs(h, spec, values, f.key);
+    try renderHiddenPagination(h, size);
+}
+
 fn renderPillSummaryText(h: *Html, f: FilterSpec, v: FilterValue, selected: bool) !void {
     if (!selected) {
         try h.text(f.label);
@@ -652,7 +717,8 @@ fn renderPillSummaryText(h: *Html, f: FilterSpec, v: FilterValue, selected: bool
                 if (n > shown) try h.print(", +{d}", .{n - shown});
             } else try h.text(choiceLabelOf(c.options, csv));
         },
-        .text => try h.text(v.text.?),
+        .text_dropdown => try h.text(v.text_dropdown.?),
+        .search => unreachable,
         .tribool => |tb| try h.text(if (v.tribool.?) tb.yes_label else tb.no_label),
         .date_range => {
             const from = v.date_range.from orelse "";
@@ -736,14 +802,13 @@ fn renderPillPopover(
                 try h.text(ch.label);
             }
         },
-        .text => |tx| {
+        .text_dropdown => |tx| {
             try h.open(.form, .{
                 .hx = .{
                     .get = base_path,
                     .target = hash_target,
                     .swap = "outerHTML",
                     .push_url = "true",
-                    .trigger = "input changed delay:300ms, submit",
                 },
                 .class = "filter-form",
                 .style = "flex-direction: row; gap: 0.5rem; align-items: stretch;",
@@ -755,12 +820,13 @@ fn renderPillPopover(
                 .hx = .{ .preserve = "true" },
                 .type = "search",
                 .name = f.key,
-                .value = v.text orelse "",
+                .value = v.text_dropdown orelse "",
                 .placeholder = tx.placeholder,
             });
             try renderHiddenFilterInputs(h, spec, values, f.key);
             try renderHiddenPagination(h, size);
         },
+        .search => unreachable,
         .date_range => {
             try h.open(.form, .{
                 .hx = .{
@@ -810,7 +876,10 @@ fn renderHiddenFilterInputs(
             .choice => if (v.choice) |s| if (s.len > 0) {
                 try h.open(.input, .{ .type = "hidden", .name = f.key, .value = s });
             },
-            .text => if (v.text) |s| if (s.len > 0) {
+            .text_dropdown => if (v.text_dropdown) |s| if (s.len > 0) {
+                try h.open(.input, .{ .type = "hidden", .name = f.key, .value = s });
+            },
+            .search => if (v.search) |s| if (s.len > 0) {
                 try h.open(.input, .{ .type = "hidden", .name = f.key, .value = s });
             },
             .tribool => if (v.tribool) |b| {
