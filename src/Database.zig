@@ -78,7 +78,7 @@ fn Result(config: QueryConfig) type {
     return switch (config.kind) {
         .row => ?Rows(config).Row,
         .rows => Rows(config),
-        .exec => void,
+        .exec => anyerror!void,
         .returning => @compileError("returning queries must use .runReturning()"),
     };
 }
@@ -173,7 +173,9 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
                     return Rows(config){ .rows = .{ .stmt = stmt, .err = null } };
                 },
                 .exec => {
-                    stmt.stepToCompletion() catch db.fatal(src);
+                    // Reset so a failed step doesn't poison the next bind().
+                    defer stmt.reset() catch {};
+                    try stmt.stepToCompletion();
                 },
             }
         }

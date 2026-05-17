@@ -255,7 +255,7 @@ pub const Ctx = struct {
         qs.insert_credential.run(@src(), db, .{
             zqlite.blob(cred_id_bytes),
             zqlite.blob(&sec1),
-        });
+        }) catch db.fatal(@src());
 
         log.info("Registered credential ({} bytes)", .{cred_id_bytes.len});
 
@@ -491,7 +491,7 @@ pub const Ctx = struct {
         qs.insert_session.run(@src(), db, .{
             zqlite.blob(&token),
             cred_db_id,
-        });
+        }) catch db.fatal(@src());
 
         const token_hex = std.fmt.bytesToHex(token, .lower);
         var cookie_buf: [128]u8 = undefined;
@@ -513,7 +513,7 @@ pub const Ctx = struct {
         if (token) |t| {
             ctx.qs.delete_session.run(@src(), ctx.db, .{
                 zqlite.blob(&t),
-            });
+            }) catch ctx.db.fatal(@src());
         }
 
         try request.respond("", .{

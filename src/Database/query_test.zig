@@ -102,7 +102,7 @@ test "Query positional binding handles enums optional enums and packed structs" 
     var qs = db.initQueries(BindingQueries);
     defer db.deinitQueries(BindingQueries, &qs);
 
-    qs.insert_positional.run(@src(), db, .{
+    try qs.insert_positional.run(@src(), db, .{
         1,
         .chocolate,
         .vanilla,
@@ -130,7 +130,7 @@ test "Query named :args bind by field and reuse repeated parameters" {
     var qs = db.initQueries(BindingQueries);
     defer db.deinitQueries(BindingQueries, &qs);
 
-    qs.insert_named.run(@src(), db, .{
+    try qs.insert_named.run(@src(), db, .{
         .id = 2,
         .flavor = .vanilla,
         .maybe_flavor = null,
