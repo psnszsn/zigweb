@@ -106,6 +106,22 @@ const notes_columns: []const Table.ColumnSpec = &.{
     .{ .name = "id", .header = "" },
 };
 
+fn notesValueCell(row: NotesQuery.Row, field: std.meta.FieldEnum(NotesQuery.Cols), w: *std.Io.Writer) anyerror!void {
+    switch (field) {
+        .content => try w.writeAll(row.textNoDupe(.content)),
+        .status => try w.writeAll(row.textNoDupe(.status)),
+        .category => try w.writeAll(row.textNoDupe(.category)),
+        .created => {
+            const ts = row.get(.created);
+            const epoch = std.time.epoch.EpochSeconds{ .secs = @intCast(ts) };
+            const ymd = epoch.getEpochDay().calculateYearDay();
+            const md = ymd.calculateMonthDay();
+            try w.print("{d:0>4}-{d:0>2}-{d:0>2}", .{ ymd.year, @intFromEnum(md.month), md.day_index + 1 });
+        },
+        .id => try w.print("{d}", .{row.get(.id)}),
+    }
+}
+
 fn renderNotesCell(row: NotesQuery.Row, field: std.meta.FieldEnum(NotesQuery.Cols), h: *zigweb.Html) anyerror!void {
     switch (field) {
         .content => try h.text(row.textNoDupe(.content)),
@@ -176,7 +192,7 @@ pub fn renderTableRegion(h: Html, qp: QueryParams) !void {
 
     const filter_values = qp.filterValues();
 
-    const spec = Table.forRows(NotesQuery, renderNotesCell, null, &rows, .{
+    const spec = Table.forRows(NotesQuery, renderNotesCell, null, notesValueCell, &rows, .{
         .base_path = "/notes",
         .table_id = "notes-table",
         .filters_spec = filters_spec,
@@ -204,6 +220,7 @@ pub fn handle_request(
     switch (request.head.method) {
         .GET => {
             if (std.mem.eql(u8, t.path, "/notes")) {
+                if (Table.isCsvExportRequest(t.query)) return handleExport(request, app, session);
                 if (zigweb.Table.isHxRequest(request)) return renderRegion(request, app, session, qp);
                 var resp: zigweb.server.Response = .{};
                 try resp.init(request, .{ .respond_options = zigweb.server.html_page_headers });
@@ -251,6 +268,42 @@ fn renderRegion(
     const h: Html = .{ .inner = &inner, .app = app, .io = undefined, .session = session };
     try renderTableRegion(h, qp);
     try resp.end();
+}
+
+fn handleExport(request: *std.http.Server.Request, app: *const App, session: i64) !void {
+    var rows = app.qs.notes_list_filtered.run(@src(), app.db.*, .{
+        .credential = session,
+        .status = null,
+        .category = null,
+        .q = null,
+        .created_from = null,
+        .created_to = null,
+        .limit = -1,
+        .offset = 0,
+    });
+    defer rows.deinit();
+
+    const table = Table.forRows(NotesQuery, renderNotesCell, null, notesValueCell, &rows, .{
+        .base_path = "/notes",
+        .table_id = "notes-table",
+        .filters_spec = filters_spec,
+        .filter_values = &.{},
+        .page = 1,
+        .size = 1,
+        .columns = notes_columns,
+    });
+
+    var write_buf: [4096]u8 = undefined;
+    var body_writer = try request.respondStreaming(&write_buf, .{
+        .respond_options = .{
+            .extra_headers = &.{
+                .{ .name = "content-type", .value = "text/csv; charset=utf-8" },
+                .{ .name = "content-disposition", .value = "attachment; filename=\"notes.csv\"" },
+            },
+        },
+    });
+    try table.writeCsv(&body_writer.writer);
+    try body_writer.end();
 }
 
 fn handleAdd(request: *std.http.Server.Request, app: *const App, session: i64) !void {

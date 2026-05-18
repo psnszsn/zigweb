@@ -22,6 +22,10 @@ pub const Hx = struct {
     preserve: ?[]const u8 = null,
 };
 
+pub const Aria = struct {
+    label: ?[]const u8 = null,
+};
+
 pub const html = struct {
     @"id": ?[]const u8 = null,
     @"class": ?[]const u8 = null,
@@ -123,6 +127,7 @@ pub const html = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -227,6 +232,7 @@ pub const head = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -331,6 +337,7 @@ pub const title = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -441,6 +448,7 @@ pub const meta = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -561,6 +569,7 @@ pub const link = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -683,6 +692,7 @@ pub const body = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -787,6 +797,7 @@ pub const div = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -891,6 +902,7 @@ pub const span = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -995,6 +1007,7 @@ pub const p = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -1107,6 +1120,7 @@ pub const a = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -1225,6 +1239,7 @@ pub const button = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -1363,6 +1378,7 @@ pub const input = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -1467,6 +1483,7 @@ pub const br = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -1571,6 +1588,7 @@ pub const hr = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -1675,6 +1693,7 @@ pub const ul = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -1782,6 +1801,7 @@ pub const ol = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -1887,6 +1907,7 @@ pub const li = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -1991,6 +2012,7 @@ pub const h1 = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -2095,6 +2117,7 @@ pub const h2 = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -2199,6 +2222,7 @@ pub const h3 = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -2303,6 +2327,7 @@ pub const section = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -2407,6 +2432,7 @@ pub const nav = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -2511,6 +2537,7 @@ pub const header = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -2615,6 +2642,7 @@ pub const footer = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -2719,6 +2747,7 @@ pub const main = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -2831,6 +2860,7 @@ pub const form = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -2936,6 +2966,7 @@ pub const label = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -3040,6 +3071,7 @@ pub const table = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -3144,6 +3176,7 @@ pub const tr = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -3251,6 +3284,7 @@ pub const td = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -3360,6 +3394,7 @@ pub const th = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -3464,6 +3499,7 @@ pub const thead = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -3568,6 +3604,7 @@ pub const tbody = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -3682,6 +3719,7 @@ pub const script = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -3799,6 +3837,7 @@ pub const img = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -3916,6 +3955,7 @@ pub const textarea = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -4027,6 +4067,7 @@ pub const select = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -4135,6 +4176,7 @@ pub const option = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -4240,6 +4282,7 @@ pub const time = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -4344,6 +4387,7 @@ pub const article = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -4448,6 +4492,7 @@ pub const small = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -4554,6 +4599,7 @@ pub const details = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 
@@ -4658,6 +4704,7 @@ pub const summary = struct {
     @"onvolumechange": ?[]const u8 = null,
     @"onwaiting": ?[]const u8 = null,
     @"onwheel": ?[]const u8 = null,
+    aria: Aria = .{},
     hx: Hx = .{},
 };
 

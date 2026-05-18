@@ -16,11 +16,15 @@ render_cell: *const fn (row: *zqlite.Row, column: []const u8, h: *Html) anyerror
 /// Set via the `rowIdFn` arg to `forRows` to emit `<tr id="…">` for
 /// htmx-targeted partial swaps. Returned slice must alias `buf`.
 row_id_fn: ?*const fn (buf: []u8, row: *zqlite.Row) []const u8 = null,
+/// Set via the `valueCellFn` arg to `forRows` to enable the CSV
+/// export link in the footer and `writeCsv`.
+value_cell: ?*const fn (row: *zqlite.Row, column: []const u8, w: *std.Io.Writer) anyerror!void = null,
 
 pub fn forRows(
     comptime QueryT: type,
     comptime renderCellFn: fn (QueryT.Row, std.meta.FieldEnum(QueryT.Cols), *Html) anyerror!void,
     comptime rowIdFn: ?fn (buf: []u8, row: QueryT.Row) []const u8,
+    comptime valueCellFn: ?fn (QueryT.Row, std.meta.FieldEnum(QueryT.Cols), *std.Io.Writer) anyerror!void,
     rows: anytype,
     opts: struct {
         base_path: []const u8,
@@ -50,6 +54,11 @@ pub fn forRows(
             const r: QueryT.Row = .{ .row = slot.* };
             return rowIdFn.?(buf, r);
         }
+        fn val(slot: *zqlite.Row, column: []const u8, w: *std.Io.Writer) anyerror!void {
+            const r: QueryT.Row = .{ .row = slot.* };
+            const field = std.meta.stringToEnum(Field, column) orelse return error.UnknownColumn;
+            try valueCellFn.?(r, field, w);
+        }
     };
     return .{
         .base_path = opts.base_path,
@@ -63,11 +72,12 @@ pub fn forRows(
         .next_row = adapter.next,
         .render_cell = adapter.cell,
         .row_id_fn = if (rowIdFn != null) adapter.rid else null,
+        .value_cell = if (valueCellFn != null) adapter.val else null,
     };
 }
 
 pub fn render(self: Table, h: *Html, total: usize) !void {
-    try renderFilterPanel(h, self.base_path, self.table_id, self.filters_spec, self.filter_values, self.page, self.size);
+    try renderFilterPanel(h, self.base_path, self.table_id, self.filters_spec, self.filter_values, self.page, self.size, self.value_cell != null);
     try self.renderTableBody(h);
     try renderSpecPagination(h, self.base_path, self.table_id, self.filters_spec, self.filter_values, self.page, self.size, .{
         .page = self.page,
@@ -497,6 +507,70 @@ fn overflow(base: []const u8, cap: usize) []const u8 {
     return base;
 }
 
+// ── CSV export ──────────────────────────────────────────────────────
+
+/// True if the query string contains `export=csv`.
+pub fn isCsvExportRequest(query: []const u8) bool {
+    var reader = std.Io.Reader.fixed(query);
+    var it = query_parse.FormIterator.init(&reader);
+    while (it.next() catch null) |pair| {
+        if (!pair.eql_key("export")) continue;
+        var buf: [16]u8 = undefined;
+        var w = std.Io.Writer.fixed(&buf);
+        _ = pair.value_reader.streamRemaining(&w) catch return false;
+        return std.mem.eql(u8, w.buffered(), "csv");
+    }
+    return false;
+}
+
+/// RFC 4180: quote a field if it contains `,`, `"`, `\r`, or `\n`;
+/// double up internal quotes.
+fn writeCsvField(w: *std.Io.Writer, raw: []const u8) !void {
+    var needs_quote = false;
+    for (raw) |b| switch (b) {
+        ',', '"', '\r', '\n' => {
+            needs_quote = true;
+            break;
+        },
+        else => {},
+    };
+    if (!needs_quote) {
+        try w.writeAll(raw);
+        return;
+    }
+    try w.writeByte('"');
+    for (raw) |b| {
+        if (b == '"') try w.writeAll("\"\"") else try w.writeByte(b);
+    }
+    try w.writeByte('"');
+}
+
+/// Streams the full table contents as CSV. Iterates `next_row` and
+/// calls `value_cell` for each column; caller must ensure the row
+/// iterator is the unfiltered/unpaginated source they want exported.
+/// Errors with `error.NoValueCell` if `value_cell` was not set.
+pub fn writeCsv(self: Table, w: *std.Io.Writer) !void {
+    if (self.value_cell == null) return error.NoValueCell;
+
+    for (self.columns, 0..) |col, i| {
+        if (i > 0) try w.writeByte(',');
+        try writeCsvField(w, col.header);
+    }
+    try w.writeAll("\r\n");
+
+    var slot: zqlite.Row = undefined;
+    while (self.next_row(self.rows_ctx, &slot)) {
+        var field_buf: [4096]u8 = undefined;
+        for (self.columns, 0..) |col, i| {
+            if (i > 0) try w.writeByte(',');
+            var fw = std.Io.Writer.fixed(&field_buf);
+            try self.value_cell.?(&slot, col.name, &fw);
+            try writeCsvField(w, fw.buffered());
+        }
+        try w.writeAll("\r\n");
+    }
+}
+
 // ── Filter-state predicates ─────────────────────────────────────────
 
 fn choiceLabelOf(options: []const ChoiceOption, value: []const u8) []const u8 {
@@ -551,6 +625,7 @@ pub fn renderFilterPanel(
     values: []const FilterValue,
     page: usize,
     size: usize,
+    export_available: bool,
 ) !void {
     try h.open(.div, .{ .class = "filter-bar" });
     defer h.close(.div);
@@ -565,6 +640,22 @@ pub fn renderFilterPanel(
     }
 
     if (any_hidden) try renderAddFilter(h, base_path, table_id, spec, values, page, size);
+
+    if (export_available) try renderExportPill(h, base_path);
+}
+
+fn renderExportPill(h: *Html, base_path: []const u8) !void {
+    try h.open(.a, .{
+        .class = "filter-pill export-pill",
+        .href = try h.fmt("{s}?export=csv", .{base_path}),
+        .@"download" = "",
+        .title = "Export all data (ignores filters)",
+        .aria = .{ .label = "Export CSV" },
+    });
+    defer h.close(.a);
+    try h.raw(
+        \\<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    );
 }
 
 pub fn renderOneFilterPill(
@@ -1049,6 +1140,35 @@ pub fn renderAddFilter(
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
+
+test "writeCsvField: plain / comma / quote / newline / empty" {
+    var buf: [128]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+
+    try writeCsvField(&w, "");
+    try writeCsvField(&w, ",");
+    w.writeByte('|') catch unreachable;
+    try writeCsvField(&w, "plain");
+    w.writeByte('|') catch unreachable;
+    try writeCsvField(&w, "a,b");
+    w.writeByte('|') catch unreachable;
+    try writeCsvField(&w, "say \"hi\"");
+    w.writeByte('|') catch unreachable;
+    try writeCsvField(&w, "line1\nline2");
+
+    try std.testing.expectEqualStrings(
+        "\",\"|plain|\"a,b\"|\"say \"\"hi\"\"\"|\"line1\nline2\"",
+        w.buffered(),
+    );
+}
+
+test "isCsvExportRequest" {
+    try std.testing.expect(isCsvExportRequest("export=csv"));
+    try std.testing.expect(isCsvExportRequest("page=2&export=csv&size=10"));
+    try std.testing.expect(!isCsvExportRequest(""));
+    try std.testing.expect(!isCsvExportRequest("page=2"));
+    try std.testing.expect(!isCsvExportRequest("export=json"));
+}
 
 test "choiceContains: empty / single / multi / no match" {
     try std.testing.expect(!choiceContains(null, "x"));

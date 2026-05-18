@@ -10,6 +10,10 @@ const htmx_fields: []const []const u8 = &.{
     "sync",     "boost",     "disabled_elt", "preserve",
 };
 
+const aria_fields: []const []const u8 = &.{
+    "label",
+};
+
 const tags: []const []const u8 = &.{
     "html",    "head",   "title",   "meta",    "link",   "body",
     "div",     "span",   "p",       "a",       "button", "input",
@@ -38,6 +42,12 @@ pub fn main(init: std.process.Init) void {
     }
     stdout.writeAll("};\n\n") catch return;
 
+    stdout.writeAll("pub const Aria = struct {\n") catch return;
+    for (aria_fields) |aria_name| {
+        stdout.print("    {s}: ?[]const u8 = null,\n", .{aria_name}) catch return;
+    }
+    stdout.writeAll("};\n\n") catch return;
+
     for (tags) |tag| {
         const kind = std.meta.stringToEnum(Ast.Kind, tag) orelse {
             stdout.print("pub const {s} = struct {{}};\n\n", .{tag}) catch return;
@@ -57,6 +67,7 @@ pub fn main(init: std.process.Init) void {
             }
         }
 
+        stdout.writeAll("    aria: Aria = .{},\n") catch return;
         stdout.writeAll("    hx: Hx = .{},\n") catch return;
 
         stdout.writeAll("};\n\n") catch return;

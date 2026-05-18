@@ -95,6 +95,10 @@ fn writeAttrs(w: *Writer, attrs: anytype) !void {
             try writeHxAttrs(w, @field(attrs, f.name));
             continue;
         }
+        if (comptime std.mem.eql(u8, f.name, "aria")) {
+            try writeAriaAttrs(w, @field(attrs, f.name));
+            continue;
+        }
         if (@field(attrs, f.name)) |val| {
             if (@TypeOf(val) == bool) {
                 if (val) try w.print(" {s}", .{f.name});
@@ -112,6 +116,21 @@ fn writeHxAttrs(w: *Writer, hx: generated_attrs.Hx) !void {
         if (@field(hx, f.name)) |val| {
             const wire = comptime blk: {
                 var arr: [3 + f.name.len]u8 = ("hx-" ++ f.name).*;
+                std.mem.replaceScalar(u8, &arr, '_', '-');
+                break :blk arr;
+            };
+            try w.print(" {s}=\"", .{&wire});
+            try escapeAttr(w, val);
+            try w.writeAll("\"");
+        }
+    }
+}
+
+fn writeAriaAttrs(w: *Writer, aria: generated_attrs.Aria) !void {
+    inline for (@typeInfo(generated_attrs.Aria).@"struct".fields) |f| {
+        if (@field(aria, f.name)) |val| {
+            const wire = comptime blk: {
+                var arr: [5 + f.name.len]u8 = ("aria-" ++ f.name).*;
                 std.mem.replaceScalar(u8, &arr, '_', '-');
                 break :blk arr;
             };
