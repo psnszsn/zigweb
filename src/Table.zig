@@ -927,61 +927,72 @@ pub fn renderSpecPagination(
 
     try h.open(.div, .{
         .class = "pagination",
-        .style = "display: flex; gap: 0.75rem; align-items: center; justify-content: center; margin-top: 1rem;",
+        .style = "display: flex; gap: 0.75rem; align-items: center; justify-content: space-between; margin-top: 1rem;",
     });
     defer h.close(.div);
 
-    if (p.page > 1) {
-        var prev_buf: [512]u8 = undefined;
-        const prev_href = buildUrlFromSpec(&prev_buf, base_path, spec, values, page, size, .{ .set_page = p.page - 1 });
-        try h.open(.a, .{
-            .href = prev_href,
-            .class = "btn",
-            .hx = .{
-                .get = prev_href,
-                .target = hash_target,
-                .swap = "outerHTML",
-                .push_url = "true",
-            },
-        });
-        defer h.close(.a);
-        try h.text("Prev");
-    } else {
-        try h.open(.button, .{ .class = "btn", .type = "button", .disabled = true });
-        defer h.close(.button);
-        try h.text("Prev");
-    }
+    const last_page: usize = (p.total + p.size - 1) / p.size;
+    const has_prev = p.page > 1;
+    const has_next = p.page < last_page;
+
+    try renderPageButton(h, "« First", if (has_prev) 1 else null, base_path, spec, values, page, size, hash_target);
 
     {
-        try h.open(.span, .{
-            .class = "pagination-label",
-            .style = "color: #666; font-size: 0.85rem;",
+        try h.open(.div, .{
+            .class = "pagination-center",
+            .style = "display: flex; gap: 0.75rem; align-items: center;",
         });
-        defer h.close(.span);
-        const n: usize = (p.page - 1) * p.size + 1;
-        const m: usize = @min(p.page * p.size, p.total);
-        try h.print("Showing {d}–{d} of {d}", .{ n, m, p.total });
+        defer h.close(.div);
+
+        try renderPageButton(h, "Prev", if (has_prev) p.page - 1 else null, base_path, spec, values, page, size, hash_target);
+
+        {
+            try h.open(.span, .{
+                .class = "pagination-label",
+                .style = "color: #666; font-size: 0.85rem;",
+            });
+            defer h.close(.span);
+            const n: usize = (p.page - 1) * p.size + 1;
+            const m: usize = @min(p.page * p.size, p.total);
+            try h.print("Showing {d}–{d} of {d}", .{ n, m, p.total });
+        }
+
+        try renderPageButton(h, "Next", if (has_next) p.page + 1 else null, base_path, spec, values, page, size, hash_target);
     }
 
-    if (p.page * p.size < p.total) {
-        var next_buf: [512]u8 = undefined;
-        const next_href = buildUrlFromSpec(&next_buf, base_path, spec, values, page, size, .{ .set_page = p.page + 1 });
+    try renderPageButton(h, "Last »", if (has_next) last_page else null, base_path, spec, values, page, size, hash_target);
+}
+
+fn renderPageButton(
+    h: *Html,
+    label: []const u8,
+    target_page: ?usize,
+    base_path: []const u8,
+    spec: []const FilterSpec,
+    values: []const FilterValue,
+    page: usize,
+    size: usize,
+    hash_target: []const u8,
+) !void {
+    if (target_page) |tp| {
+        var url_buf: [512]u8 = undefined;
+        const href = buildUrlFromSpec(&url_buf, base_path, spec, values, page, size, .{ .set_page = tp });
         try h.open(.a, .{
-            .href = next_href,
+            .href = href,
             .class = "btn",
             .hx = .{
-                .get = next_href,
+                .get = href,
                 .target = hash_target,
                 .swap = "outerHTML",
                 .push_url = "true",
             },
         });
         defer h.close(.a);
-        try h.text("Next");
+        try h.text(label);
     } else {
         try h.open(.button, .{ .class = "btn", .type = "button", .disabled = true });
         defer h.close(.button);
-        try h.text("Next");
+        try h.text(label);
     }
 }
 
