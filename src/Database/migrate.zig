@@ -292,6 +292,7 @@ fn getTables(arena: Allocator, conn: zqlite.Conn) !StringMap {
     var rows = try conn.rows(
         \\SELECT name, sql FROM sqlite_schema
         \\WHERE type = 'table' AND name != 'sqlite_sequence'
+        \\  AND name NOT GLOB '_litestream*'
         \\  AND name NOT IN (
         \\    SELECT name FROM pragma_table_list WHERE "type" = 'shadow'
         \\  )
