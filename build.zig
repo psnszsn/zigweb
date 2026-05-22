@@ -15,6 +15,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .sqlite3 = sqlite3_cflags,
     });
+    const zeit_dep = b.dependency("zeit", .{ .target = target, .optimize = optimize });
 
     // Library module (for consumption by other packages)
     const zigweb_mod = b.addModule("zigweb", .{
@@ -24,6 +25,7 @@ pub fn build(b: *std.Build) void {
     });
     zigweb_mod.addImport("cbor", cbor_dep.module("cbor"));
     zigweb_mod.addImport("zqlite", zqlite_dep.module("zqlite"));
+    zigweb_mod.addImport("zeit", zeit_dep.module("zeit"));
 
     // zig build check -- verify all library code compiles
     const lib = b.addObject(.{

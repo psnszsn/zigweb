@@ -235,7 +235,7 @@ pub fn handle_request(
                 var resp: zigweb.server.Response = .{};
                 try resp.init(request, .{ .respond_options = zigweb.server.html_partial_headers });
                 var h = resp.html();
-                try Table.renderOneFilterPill(&h, "/notes", "notes-table", filters_spec, &filter_values, qp.page, qp.size, key);
+                try Table.renderOneFilterPill(&h, "/notes", "notes-table", filters_spec, &filter_values, qp.page, qp.size, key, null);
                 return resp.end();
             }
         },

@@ -19,6 +19,9 @@ row_id_fn: ?*const fn (buf: []u8, row: *zqlite.Row) []const u8 = null,
 /// Set via the `valueCellFn` arg to `forRows` to enable the CSV
 /// export link in the footer and `writeCsv`.
 value_cell: ?*const fn (row: *zqlite.Row, column: []const u8, w: *std.Io.Writer) anyerror!void = null,
+/// Current instant, used to resolve `date_range` filter presets.
+/// Null → presets are omitted. Set via `forRows`' `now` option.
+now: ?zeit.Instant = null,
 
 pub fn forRows(
     comptime QueryT: type,
@@ -34,6 +37,7 @@ pub fn forRows(
         page: usize,
         size: usize,
         columns: []const ColumnSpec,
+        now: ?zeit.Instant = null,
     },
 ) Table {
     const Iter = @typeInfo(@TypeOf(rows)).pointer.child;
@@ -73,11 +77,12 @@ pub fn forRows(
         .render_cell = adapter.cell,
         .row_id_fn = if (rowIdFn != null) adapter.rid else null,
         .value_cell = if (valueCellFn != null) adapter.val else null,
+        .now = opts.now,
     };
 }
 
 pub fn render(self: Table, h: *Html, total: usize) !void {
-    try renderFilterPanel(h, self.base_path, self.table_id, self.filters_spec, self.filter_values, self.page, self.size, self.value_cell != null);
+    try renderFilterPanel(h, self.base_path, self.table_id, self.filters_spec, self.filter_values, self.page, self.size, self.value_cell != null, self.now);
     try self.renderTableBody(h);
     try renderSpecPagination(h, self.base_path, self.table_id, self.filters_spec, self.filter_values, self.page, self.size, .{
         .page = self.page,
@@ -211,6 +216,13 @@ pub const BuildUrlOverride = union(enum) {
         key: []const u8,
         value: ?[]const u8,
         op: enum { set, toggle } = .set,
+    },
+    /// Overwrite a `date_range` filter's from/to bounds — used by the
+    /// preset buttons. An empty string clears that bound.
+    set_date_range: struct {
+        key: []const u8,
+        from: []const u8,
+        to: []const u8,
     },
     clear_filter: struct { key: []const u8 },
 };
@@ -445,24 +457,28 @@ pub fn buildUrlFromSpec(
                 }
             },
             .date_range => {
-                const cleared = switch (override) {
-                    .clear_filter => |cf| std.mem.eql(u8, cf.key, f.key),
-                    else => false,
-                };
-                if (cleared) continue;
-                const dr = v.date_range;
-                if (dr.from) |fv| if (fv.len > 0) {
+                var from_v: []const u8 = if (v.date_range.from) |s| s else "";
+                var to_v: []const u8 = if (v.date_range.to) |s| s else "";
+                switch (override) {
+                    .clear_filter => |cf| if (std.mem.eql(u8, cf.key, f.key)) continue,
+                    .set_date_range => |sd| if (std.mem.eql(u8, sd.key, f.key)) {
+                        from_v = sd.from;
+                        to_v = sd.to;
+                    },
+                    else => {},
+                }
+                if (from_v.len > 0) {
                     w.writeByte(sep) catch return overflow(base_path, buf.len);
                     sep = '&';
                     w.print("{s}_from=", .{f.key}) catch return overflow(base_path, buf.len);
-                    writeEncodedTo(&w, fv);
-                };
-                if (dr.to) |tv| if (tv.len > 0) {
+                    writeEncodedTo(&w, from_v);
+                }
+                if (to_v.len > 0) {
                     w.writeByte(sep) catch return overflow(base_path, buf.len);
                     sep = '&';
                     w.print("{s}_to=", .{f.key}) catch return overflow(base_path, buf.len);
-                    writeEncodedTo(&w, tv);
-                };
+                    writeEncodedTo(&w, to_v);
+                }
             },
         }
     }
@@ -626,6 +642,7 @@ pub fn renderFilterPanel(
     page: usize,
     size: usize,
     export_available: bool,
+    now: ?zeit.Instant,
 ) !void {
     try h.open(.div, .{ .class = "filter-bar" });
     defer h.close(.div);
@@ -633,7 +650,7 @@ pub fn renderFilterPanel(
     var any_hidden = false;
     for (spec, values[0..spec.len], 0..) |f, v, i| {
         if (filterVisible(f, v)) {
-            try renderFilterPill(h, base_path, table_id, spec, values, page, size, i);
+            try renderFilterPill(h, base_path, table_id, spec, values, page, size, i, now);
         } else {
             any_hidden = true;
         }
@@ -667,10 +684,11 @@ pub fn renderOneFilterPill(
     page: usize,
     size: usize,
     key: []const u8,
+    now: ?zeit.Instant,
 ) !void {
     for (spec, 0..) |f, i| {
         if (std.mem.eql(u8, f.key, key)) {
-            try renderFilterPill(h, base_path, table_id, spec, values, page, size, i);
+            try renderFilterPill(h, base_path, table_id, spec, values, page, size, i, now);
             try h.open(.span, .{
                 .id = try h.fmt("add-filter-menu-{s}-{s}", .{ table_id, f.key }),
                 .hx = .{ .swap_oob = "delete" },
@@ -690,6 +708,7 @@ fn renderFilterPill(
     page: usize,
     size: usize,
     idx: usize,
+    now: ?zeit.Instant,
 ) !void {
     const f = spec[idx];
     const v = values[idx];
@@ -720,7 +739,7 @@ fn renderFilterPill(
             try renderPillSummaryText(h, f, v, selected);
         }
 
-        try renderPillPopover(h, base_path, hash_target, spec, values, page, size, idx);
+        try renderPillPopover(h, base_path, hash_target, spec, values, page, size, idx, now);
     }
 
     if (selected) {
@@ -821,6 +840,48 @@ fn renderPillSummaryText(h: *Html, f: FilterSpec, v: FilterValue, selected: bool
     }
 }
 
+const DateRangePreset = struct {
+    label: []const u8,
+    from: []const u8 = "",
+    to: []const u8 = "",
+};
+
+/// Resolves the built-in `date_range` presets relative to `now_inst`
+/// (interpreted as UTC). Date strings are allocated via `allocator` — a
+/// stack-backed FixedBufferAllocator at the call site is plenty (~90
+/// bytes total) — and must outlive the returned array. An empty string
+/// is an open-ended bound; the "All" preset has both empty.
+fn computeDatePresets(allocator: std.mem.Allocator, now_inst: zeit.Instant) ![7]DateRangePreset {
+    const fmtDate = struct {
+        fn f(alloc: std.mem.Allocator, y: i32, m: u32, d: u32) ![]const u8 {
+            return std.fmt.allocPrint(alloc, "{d}-{d:0>2}-{d:0>2}", .{ y, m, d });
+        }
+    }.f;
+
+    const t = now_inst.time();
+    const y = t.year;
+    const mo: u32 = @intFromEnum(t.month);
+
+    const lm_y: i32 = if (mo == 1) y - 1 else y;
+    const lm_m: u32 = if (mo == 1) 12 else mo - 1;
+    const lm_last: u32 = @as(zeit.Month, @enumFromInt(lm_m)).lastDay(lm_y);
+
+    const today_days = zeit.daysFromCivil(.{ .year = y, .month = t.month, .day = t.day });
+    const today_str = try fmtDate(allocator, y, mo, t.day);
+    const d30 = zeit.civilFromDays(today_days - 30);
+    const d90 = zeit.civilFromDays(today_days - 90);
+
+    return .{
+        .{ .label = "This month", .from = try fmtDate(allocator, y, mo, 1) },
+        .{ .label = "Last month", .from = try fmtDate(allocator, lm_y, lm_m, 1), .to = try fmtDate(allocator, lm_y, lm_m, lm_last) },
+        .{ .label = "This year", .from = try fmtDate(allocator, y, 1, 1) },
+        .{ .label = "Last year", .from = try fmtDate(allocator, y - 1, 1, 1), .to = try fmtDate(allocator, y - 1, 12, 31) },
+        .{ .label = "Last 30 days", .from = try fmtDate(allocator, d30.year, @intFromEnum(d30.month), d30.day), .to = today_str },
+        .{ .label = "Last 90 days", .from = try fmtDate(allocator, d90.year, @intFromEnum(d90.month), d90.day), .to = today_str },
+        .{ .label = "All" },
+    };
+}
+
 fn renderPillPopover(
     h: *Html,
     base_path: []const u8,
@@ -830,6 +891,7 @@ fn renderPillPopover(
     page: usize,
     size: usize,
     idx: usize,
+    now: ?zeit.Instant,
 ) !void {
     const f = spec[idx];
     const v = values[idx];
@@ -927,25 +989,57 @@ fn renderPillPopover(
                     .push_url = "true",
                 },
                 .class = "filter-form",
-                .style = "flex-direction: row; gap: 0.5rem; align-items: end;",
             });
             defer h.close(.form);
 
-            try h.open(.input, .{
-                .type = "date",
-                .name = try h.fmt("{s}_from", .{f.key}),
-                .value = v.date_range.from orelse "",
-            });
-            try h.open(.input, .{
-                .type = "date",
-                .name = try h.fmt("{s}_to", .{f.key}),
-                .value = v.date_range.to orelse "",
-            });
+            // Quick-select presets, resolved against `now`. Each is an
+            // hx-get link that sets this filter's from/to via the
+            // `set_date_range` URL override.
+            if (now) |inst| {
+                var fba_buf: [256]u8 = undefined;
+                var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
+                const presets = try computeDatePresets(fba.allocator(), inst);
+                const cur_from = v.date_range.from orelse "";
+                const cur_to = v.date_range.to orelse "";
+
+                try h.open(.div, .{ .style = "display: flex; flex-wrap: wrap; gap: 0.35rem;" });
+                defer h.close(.div);
+                for (presets) |p| {
+                    const active = std.mem.eql(u8, p.from, cur_from) and std.mem.eql(u8, p.to, cur_to);
+                    var url_buf: [512]u8 = undefined;
+                    const url = buildUrlFromSpec(&url_buf, base_path, spec, values, page, size, .{
+                        .set_date_range = .{ .key = f.key, .from = p.from, .to = p.to },
+                    });
+                    try h.open(.a, .{
+                        .class = if (active) "btn btn-primary" else "btn",
+                        .style = "padding: 4px 10px; font-size: 0.8rem;",
+                        .href = url,
+                        .hx = .{ .get = url, .target = hash_target, .swap = "outerHTML", .push_url = "true" },
+                    });
+                    defer h.close(.a);
+                    try h.text(p.label);
+                }
+            }
+
+            {
+                try h.open(.div, .{ .style = "display: flex; gap: 0.5rem; align-items: end;" });
+                defer h.close(.div);
+                try h.open(.input, .{
+                    .type = "date",
+                    .name = try h.fmt("{s}_from", .{f.key}),
+                    .value = v.date_range.from orelse "",
+                });
+                try h.open(.input, .{
+                    .type = "date",
+                    .name = try h.fmt("{s}_to", .{f.key}),
+                    .value = v.date_range.to orelse "",
+                });
+                try h.open(.button, .{ .class = "btn btn-primary", .type = "submit" });
+                defer h.close(.button);
+                try h.text("Apply");
+            }
             try renderHiddenFilterInputs(h, spec, values, f.key);
             try renderHiddenPagination(h, size);
-            try h.open(.button, .{ .class = "btn btn-primary", .type = "submit" });
-            defer h.close(.button);
-            try h.text("Apply");
         },
     }
 }
@@ -1272,8 +1366,53 @@ test "buildUrlFromSpec: date_range emits _from / _to" {
     );
 }
 
+test "buildUrlFromSpec: set_date_range override" {
+    const spec: []const FilterSpec = &.{
+        .{ .key = "created_at", .label = "Created", .pinned = true, .kind = .date_range },
+    };
+    const values: []const FilterValue = &.{.{ .date_range = .{} }};
+    var buf: [256]u8 = undefined;
+    // A preset sets the bounds and resets to page 1.
+    try std.testing.expectEqualStrings(
+        "/x?created_at_from=2026-05-01&page=1&size=50",
+        buildUrlFromSpec(&buf, "/x", spec, values, 3, 50, .{ .set_date_range = .{ .key = "created_at", .from = "2026-05-01", .to = "" } }),
+    );
+    // The "All" preset (empty from+to) clears both bounds.
+    try std.testing.expectEqualStrings(
+        "/x?page=1&size=50",
+        buildUrlFromSpec(&buf, "/x", spec, values, 3, 50, .{ .set_date_range = .{ .key = "created_at", .from = "", .to = "" } }),
+    );
+}
+
+test "computeDatePresets" {
+    const inst = try zeit.instant(std.testing.io, .{ .source = .{ .iso8601 = "2026-05-22T12:00:00Z" } });
+    var buf: [256]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    const p = try computeDatePresets(fba.allocator(), inst);
+
+    try std.testing.expectEqual(@as(usize, 7), p.len);
+    try std.testing.expectEqualStrings("This month", p[0].label);
+    try std.testing.expectEqualStrings("2026-05-01", p[0].from);
+    try std.testing.expectEqualStrings("", p[0].to);
+    try std.testing.expectEqualStrings("Last month", p[1].label);
+    try std.testing.expectEqualStrings("2026-04-01", p[1].from);
+    try std.testing.expectEqualStrings("2026-04-30", p[1].to);
+    try std.testing.expectEqualStrings("2026-01-01", p[2].from);
+    try std.testing.expectEqualStrings("", p[2].to);
+    try std.testing.expectEqualStrings("2025-01-01", p[3].from);
+    try std.testing.expectEqualStrings("2025-12-31", p[3].to);
+    try std.testing.expectEqualStrings("2026-04-22", p[4].from);
+    try std.testing.expectEqualStrings("2026-05-22", p[4].to);
+    try std.testing.expectEqualStrings("2026-02-21", p[5].from);
+    try std.testing.expectEqualStrings("2026-05-22", p[5].to);
+    try std.testing.expectEqualStrings("All", p[6].label);
+    try std.testing.expectEqualStrings("", p[6].from);
+    try std.testing.expectEqualStrings("", p[6].to);
+}
+
 const std = @import("std");
 const zqlite = @import("zqlite");
+const zeit = @import("zeit");
 const Html = @import("Html.zig");
 const Database = @import("Database.zig");
 const query_parse = @import("query_parse.zig");

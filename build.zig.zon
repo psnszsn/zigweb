@@ -10,6 +10,10 @@
             .url = "git+https://github.com/neurocyte/cbor#defb24a36aa497473636c653a4eb4bc92b6a65b5",
             .hash = "cbor-1.0.0-RcQE_HQwAQCukORH_t6Aa2AGQ7igyWCHpjj6dYf2ivQJ",
         },
+        .zeit = .{
+            .url = "git+https://github.com/rockorager/zeit#2a79678e05e4e82cd4efd4fd6b754dcf029c3a64",
+            .hash = "zeit-0.6.0-5I6bk7q6AgBdMJxze3D4l9ylQhkviQ_BX9FigDt13MFn",
+        },
     },
     .minimum_zig_version = "0.16.0-dev.2821+3edaef9e0",
     .paths = .{
