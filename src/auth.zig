@@ -496,7 +496,7 @@ pub const Ctx = struct {
         const token_hex = std.fmt.bytesToHex(token, .lower);
         var cookie_buf: [128]u8 = undefined;
         const secure_suffix: []const u8 = if (auth.config.secure_cookie) "; Secure" else "";
-        const cookie = std.fmt.bufPrint(&cookie_buf, "session={s}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000{s}", .{ token_hex, secure_suffix }) catch unreachable;
+        const cookie = std.fmt.bufPrint(&cookie_buf, "session={s}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000{s}", .{ token_hex, secure_suffix }) catch unreachable;
 
         log.info("Login successful, session created", .{});
 
@@ -520,7 +520,7 @@ pub const Ctx = struct {
             .status = .see_other,
             .extra_headers = &.{
                 .{ .name = "location", .value = "/" },
-                .{ .name = "set-cookie", .value = "session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0" },
+                .{ .name = "set-cookie", .value = "session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0" },
             },
         });
     }

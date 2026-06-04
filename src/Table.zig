@@ -840,48 +840,6 @@ fn renderPillSummaryText(h: *Html, f: FilterSpec, v: FilterValue, selected: bool
     }
 }
 
-const DateRangePreset = struct {
-    label: []const u8,
-    from: []const u8 = "",
-    to: []const u8 = "",
-};
-
-/// Resolves the built-in `date_range` presets relative to `now_inst`
-/// (interpreted as UTC). Date strings are allocated via `allocator` — a
-/// stack-backed FixedBufferAllocator at the call site is plenty (~90
-/// bytes total) — and must outlive the returned array. An empty string
-/// is an open-ended bound; the "All" preset has both empty.
-fn computeDatePresets(allocator: std.mem.Allocator, now_inst: zeit.Instant) ![7]DateRangePreset {
-    const fmtDate = struct {
-        fn f(alloc: std.mem.Allocator, y: i32, m: u32, d: u32) ![]const u8 {
-            return std.fmt.allocPrint(alloc, "{d}-{d:0>2}-{d:0>2}", .{ y, m, d });
-        }
-    }.f;
-
-    const t = now_inst.time();
-    const y = t.year;
-    const mo: u32 = @intFromEnum(t.month);
-
-    const lm_y: i32 = if (mo == 1) y - 1 else y;
-    const lm_m: u32 = if (mo == 1) 12 else mo - 1;
-    const lm_last: u32 = @as(zeit.Month, @enumFromInt(lm_m)).lastDay(lm_y);
-
-    const today_days = zeit.daysFromCivil(.{ .year = y, .month = t.month, .day = t.day });
-    const today_str = try fmtDate(allocator, y, mo, t.day);
-    const d30 = zeit.civilFromDays(today_days - 30);
-    const d90 = zeit.civilFromDays(today_days - 90);
-
-    return .{
-        .{ .label = "This month", .from = try fmtDate(allocator, y, mo, 1) },
-        .{ .label = "Last month", .from = try fmtDate(allocator, lm_y, lm_m, 1), .to = try fmtDate(allocator, lm_y, lm_m, lm_last) },
-        .{ .label = "This year", .from = try fmtDate(allocator, y, 1, 1) },
-        .{ .label = "Last year", .from = try fmtDate(allocator, y - 1, 1, 1), .to = try fmtDate(allocator, y - 1, 12, 31) },
-        .{ .label = "Last 30 days", .from = try fmtDate(allocator, d30.year, @intFromEnum(d30.month), d30.day), .to = today_str },
-        .{ .label = "Last 90 days", .from = try fmtDate(allocator, d90.year, @intFromEnum(d90.month), d90.day), .to = today_str },
-        .{ .label = "All" },
-    };
-}
-
 fn renderPillPopover(
     h: *Html,
     base_path: []const u8,
@@ -998,7 +956,7 @@ fn renderPillPopover(
             if (now) |inst| {
                 var fba_buf: [256]u8 = undefined;
                 var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
-                const presets = try computeDatePresets(fba.allocator(), inst);
+                const presets = try date_range.presets(fba.allocator(), inst);
                 const cur_from = v.date_range.from orelse "";
                 const cur_to = v.date_range.to orelse "";
 
@@ -1384,31 +1342,6 @@ test "buildUrlFromSpec: set_date_range override" {
     );
 }
 
-test "computeDatePresets" {
-    const inst = try zeit.instant(std.testing.io, .{ .source = .{ .iso8601 = "2026-05-22T12:00:00Z" } });
-    var buf: [256]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&buf);
-    const p = try computeDatePresets(fba.allocator(), inst);
-
-    try std.testing.expectEqual(@as(usize, 7), p.len);
-    try std.testing.expectEqualStrings("This month", p[0].label);
-    try std.testing.expectEqualStrings("2026-05-01", p[0].from);
-    try std.testing.expectEqualStrings("", p[0].to);
-    try std.testing.expectEqualStrings("Last month", p[1].label);
-    try std.testing.expectEqualStrings("2026-04-01", p[1].from);
-    try std.testing.expectEqualStrings("2026-04-30", p[1].to);
-    try std.testing.expectEqualStrings("2026-01-01", p[2].from);
-    try std.testing.expectEqualStrings("", p[2].to);
-    try std.testing.expectEqualStrings("2025-01-01", p[3].from);
-    try std.testing.expectEqualStrings("2025-12-31", p[3].to);
-    try std.testing.expectEqualStrings("2026-04-22", p[4].from);
-    try std.testing.expectEqualStrings("2026-05-22", p[4].to);
-    try std.testing.expectEqualStrings("2026-02-21", p[5].from);
-    try std.testing.expectEqualStrings("2026-05-22", p[5].to);
-    try std.testing.expectEqualStrings("All", p[6].label);
-    try std.testing.expectEqualStrings("", p[6].from);
-    try std.testing.expectEqualStrings("", p[6].to);
-}
 
 const std = @import("std");
 const zqlite = @import("zqlite");
@@ -1416,3 +1349,4 @@ const zeit = @import("zeit");
 const Html = @import("Html.zig");
 const Database = @import("Database.zig");
 const query_parse = @import("query_parse.zig");
+const date_range = @import("date_range.zig");

@@ -6,6 +6,7 @@ pub const Auth = @import("auth.zig");
 pub const server = @import("server.zig");
 pub const Table = @import("Table.zig");
 pub const query_parse = @import("query_parse.zig");
+pub const date_range = @import("date_range.zig");
 pub const zqlite = @import("zqlite");
 pub const cbor = @import("cbor");
 
@@ -14,4 +15,5 @@ pub const cbor = @import("cbor");
 test {
     _ = Table;
     _ = query_parse;
+    _ = date_range;
 }
