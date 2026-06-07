@@ -718,6 +718,11 @@ fn renderFilterPill(
         return;
     }
 
+    if (f.kind == .choice and !f.kind.choice.multi) {
+        try renderChoiceSelectPill(h, base_path, table_id, spec, values, size, idx);
+        return;
+    }
+
     var hash_buf: [64]u8 = undefined;
     const hash_target = std.fmt.bufPrint(&hash_buf, "#{s}", .{table_id}) catch table_id;
 
@@ -798,6 +803,71 @@ fn renderSearchPill(
     try renderHiddenPagination(h, size);
 }
 
+fn renderChoiceSelectPill(
+    h: *Html,
+    base_path: []const u8,
+    table_id: []const u8,
+    spec: []const FilterSpec,
+    values: []const FilterValue,
+    size: usize,
+    idx: usize,
+) !void {
+    const f = spec[idx];
+    const v = values[idx];
+    const c = f.kind.choice;
+
+    var hash_buf: [64]u8 = undefined;
+    const hash_target = std.fmt.bufPrint(&hash_buf, "#{s}", .{table_id}) catch table_id;
+
+    const selected = filterSelected(f, v);
+    const cls: []const u8 = if (selected) "filter-pill choice-pill is-selected" else "filter-pill choice-pill";
+    try h.open(.form, .{ .class = cls });
+    defer h.close(.form);
+
+    {
+        try h.open(.span, .{ .class = "pill-label" });
+        defer h.close(.span);
+        try h.text(f.label);
+    }
+
+    {
+        try h.open(.select, .{
+            .name = f.key,
+            .class = "choice-pill-select",
+            .aria = .{ .label = try h.fmt("Filter by {s}", .{f.label}) },
+            .hx = .{
+                .get = base_path,
+                .target = hash_target,
+                .swap = "outerHTML",
+                .push_url = "true",
+                .include = "closest form",
+            },
+        });
+        defer h.close(.select);
+
+        if (f.default_value == null) {
+            const none = v.choice == null or v.choice.?.len == 0;
+            try h.open(.option, .{ .value = "", .selected = if (none) true else null });
+            defer h.close(.option);
+            try h.text("All");
+        }
+
+        for (c.options) |opt| {
+            const active = if (v.choice) |s| std.mem.eql(u8, s, opt.value) else false;
+            try h.open(.option, .{
+                .value = opt.value,
+                .selected = if (active) true else null,
+                .title = opt.description,
+            });
+            defer h.close(.option);
+            try h.text(opt.label);
+        }
+    }
+
+    try renderHiddenFilterInputs(h, spec, values, f.key);
+    try renderHiddenPagination(h, size);
+}
+
 fn renderPillSummaryText(h: *Html, f: FilterSpec, v: FilterValue, selected: bool) !void {
     if (!selected) {
         try h.text(f.label);
@@ -855,35 +925,45 @@ fn renderPillPopover(
     const v = values[idx];
     switch (f.kind) {
         .choice => |c| {
-            try h.open(.div, .{ .class = "dropdown-menu" });
-            defer h.close(.div);
+            std.debug.assert(c.multi);
+            try h.open(.form, .{
+                .class = "filter-form filter-form-choice",
+                .hx = .{
+                    .get = base_path,
+                    .target = hash_target,
+                    .swap = "outerHTML",
+                    .push_url = "true",
+                },
+            });
+            defer h.close(.form);
 
-            for (c.options) |opt| {
-                const active = blk: {
-                    if (c.multi) break :blk choiceContains(v.choice, opt.value);
-                    if (v.choice) |s| break :blk std.mem.eql(u8, s, opt.value);
-                    break :blk false;
-                };
-                const op_kind: @typeInfo(@TypeOf(@as(BuildUrlOverride, undefined).set_filter)).@"struct".fields[2].type =
-                    if (c.multi) .toggle else .set;
-                var url_buf: [512]u8 = undefined;
-                const url = buildUrlFromSpec(&url_buf, base_path, spec, values, page, size, .{ .set_filter = .{ .key = f.key, .value = opt.value, .op = op_kind } });
-                const cls: []const u8 = if (active) "menu-item is-active" else "menu-item";
-                try h.open(.a, .{
-                    .class = cls,
-                    .href = url,
-                    .hx = .{
-                        .get = url,
-                        .target = hash_target,
-                        .swap = "outerHTML",
-                        .push_url = "true",
-                    },
-                    .title = opt.description,
+            {
+                try h.open(.select, .{
+                    .name = f.key,
+                    .multiple = true,
+                    .size = try h.fmt("{d}", .{@min(c.options.len, 8)}),
+                    .class = "filter-select filter-select-multi",
+                    .aria = .{ .label = try h.fmt("Filter by {s}", .{f.label}) },
+                    .@"ondblclick" = "this.form.requestSubmit()",
                 });
-                defer h.close(.a);
-                if (active) try h.raw("&check; ");
-                try h.text(opt.label);
+                defer h.close(.select);
+                for (c.options) |opt| {
+                    try h.open(.option, .{
+                        .value = opt.value,
+                        .selected = if (choiceContains(v.choice, opt.value)) true else null,
+                        .title = opt.description,
+                    });
+                    defer h.close(.option);
+                    try h.text(opt.label);
+                }
             }
+
+            try renderHiddenFilterInputs(h, spec, values, f.key);
+            try renderHiddenPagination(h, size);
+
+            try h.open(.button, .{ .class = "btn btn-primary filter-apply", .type = "submit" });
+            defer h.close(.button);
+            try h.text("Apply");
         },
         .tribool => |tb| {
             try h.open(.div, .{ .class = "dropdown-menu" });
