@@ -4,10 +4,10 @@ const Ast = superhtml_html.Ast;
 const Attribute = superhtml_html.Attribute;
 
 const htmx_fields: []const []const u8 = &.{
-    "get",      "post",      "put",       "delete",       "patch",
-    "trigger",  "target",    "swap",      "swap_oob",     "include",
-    "select",   "confirm",   "push_url",  "replace_url",  "vals",
-    "sync",     "boost",     "disabled_elt", "preserve",
+    "get",     "post",    "put",          "delete",      "patch",
+    "trigger", "target",  "swap",         "swap_oob",    "include",
+    "select",  "confirm", "push_url",     "replace_url", "vals",
+    "sync",    "boost",   "disabled_elt", "preserve",    "ext",
 };
 
 const aria_fields: []const []const u8 = &.{

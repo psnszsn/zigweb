@@ -735,7 +735,12 @@ fn renderFilterPill(
     const details_name = std.fmt.bufPrint(&name_buf, "filter-bar-{s}", .{table_id}) catch "filter-bar";
 
     {
-        try h.open(.details, .{ .class = "filter-details", .name = details_name });
+        const multi = f.kind == .choice and f.kind.choice.multi;
+        try h.open(.details, .{
+            .class = "filter-details",
+            .name = details_name,
+            .id = if (multi) try h.fmt("filter-pop-{s}-{s}", .{ table_id, f.key }) else null,
+        });
         defer h.close(.details);
 
         {
@@ -926,15 +931,7 @@ fn renderPillPopover(
     switch (f.kind) {
         .choice => |c| {
             std.debug.assert(c.multi);
-            try h.open(.form, .{
-                .class = "filter-form filter-form-choice",
-                .hx = .{
-                    .get = base_path,
-                    .target = hash_target,
-                    .swap = "outerHTML",
-                    .push_url = "true",
-                },
-            });
+            try h.open(.form, .{ .class = "filter-form filter-form-choice" });
             defer h.close(.form);
 
             {
@@ -944,7 +941,14 @@ fn renderPillPopover(
                     .size = try h.fmt("{d}", .{@min(c.options.len, 8)}),
                     .class = "filter-select filter-select-multi",
                     .aria = .{ .label = try h.fmt("Filter by {s}", .{f.label}) },
-                    .@"ondblclick" = "this.form.requestSubmit()",
+                    .hx = .{
+                        .get = base_path,
+                        .target = hash_target,
+                        .swap = "morph:outerHTML",
+                        .ext = "morph",
+                        .replace_url = "true",
+                        .include = "closest form",
+                    },
                 });
                 defer h.close(.select);
                 for (c.options) |opt| {
@@ -960,10 +964,6 @@ fn renderPillPopover(
 
             try renderHiddenFilterInputs(h, spec, values, f.key);
             try renderHiddenPagination(h, size);
-
-            try h.open(.button, .{ .class = "btn btn-primary filter-apply", .type = "submit" });
-            defer h.close(.button);
-            try h.text("Apply");
         },
         .tribool => |tb| {
             try h.open(.div, .{ .class = "dropdown-menu" });
