@@ -186,7 +186,7 @@ pub const ChoiceOption = struct {
 
 /// Shared tag set for `FilterKind` and `FilterValue` — same variant
 /// names so a switch on the kind matches a switch on the value.
-pub const FilterTag = enum { choice, text_dropdown, search, tribool, date_range };
+pub const FilterTag = enum { choice, text_dropdown, search, date_range };
 
 pub const FilterKind = union(FilterTag) {
     choice: struct {
@@ -196,10 +196,6 @@ pub const FilterKind = union(FilterTag) {
     text_dropdown: struct { placeholder: []const u8 = "Search…" },
     /// Inline input — no dropdown, renders as a flush search bar.
     search: struct { placeholder: []const u8 = "Search…" },
-    tribool: struct {
-        yes_label: []const u8 = "Yes",
-        no_label: []const u8 = "No",
-    },
     date_range,
 };
 
@@ -221,7 +217,6 @@ pub const FilterValue = union(FilterTag) {
     choice: ?[]const u8, // CSV (`"open,done"`); null = not set
     text_dropdown: ?[]const u8,
     search: ?[]const u8,
-    tribool: ?bool,
     date_range: DateRange,
 
     pub const DateRange = struct {
@@ -234,7 +229,6 @@ pub const FilterValue = union(FilterTag) {
             .choice => .{ .choice = null },
             .text_dropdown => .{ .text_dropdown = null },
             .search => .{ .search = null },
-            .tribool => .{ .tribool = null },
             .date_range => .{ .date_range = .{} },
         };
     }
@@ -377,13 +371,6 @@ pub fn parseFilterValues(
                 .choice => v.* = .{ .choice = if (decoded.len == 0) null else decoded },
                 .text_dropdown => v.* = .{ .text_dropdown = if (decoded.len == 0) null else decoded },
                 .search => v.* = .{ .search = if (decoded.len == 0) null else decoded },
-                .tribool => {
-                    if (std.mem.eql(u8, decoded, "true") or std.mem.eql(u8, decoded, "1")) {
-                        v.* = .{ .tribool = true };
-                    } else if (std.mem.eql(u8, decoded, "false") or std.mem.eql(u8, decoded, "0")) {
-                        v.* = .{ .tribool = false };
-                    }
-                },
                 .date_range => switch (slot) {
                     .from => v.date_range.from = if (decoded.len == 0) null else decoded,
                     .to => v.date_range.to = if (decoded.len == 0) null else decoded,
@@ -467,27 +454,6 @@ pub fn buildUrlFromSpec(
                     break :blk cur;
                 };
                 writeFilterParam(&w, &sep, base_path, buf.len, f, new_value) orelse return overflow(base_path, buf.len);
-            },
-            .tribool => {
-                const cur = v.tribool;
-                const new_value: ?bool = blk: {
-                    switch (override) {
-                        .clear_filter => |cf| if (std.mem.eql(u8, cf.key, f.key)) break :blk null,
-                        .set_filter => |sf| if (std.mem.eql(u8, sf.key, f.key)) {
-                            const vv = sf.value orelse break :blk null;
-                            if (std.mem.eql(u8, vv, "true")) break :blk true;
-                            if (std.mem.eql(u8, vv, "false")) break :blk false;
-                            break :blk null;
-                        },
-                        else => {},
-                    }
-                    break :blk cur;
-                };
-                if (new_value) |b| {
-                    w.writeByte(sep) catch return overflow(base_path, buf.len);
-                    sep = '&';
-                    w.print("{s}={s}", .{ f.key, if (b) "true" else "false" }) catch return overflow(base_path, buf.len);
-                }
             },
             .date_range => {
                 var from_v: []const u8 = if (v.date_range.from) |s| s else "";
@@ -649,7 +615,6 @@ fn filterSelected(f: FilterSpec, v: FilterValue) bool {
             if (f.default_value) |dv| if (std.mem.eql(u8, s, dv)) break :blk false;
             break :blk true;
         },
-        .tribool => v.tribool != null,
         .date_range => blk: {
             const dr = v.date_range;
             const from_set = if (dr.from) |s| s.len > 0 else false;
@@ -752,7 +717,7 @@ fn renderFilterPill(
     }
 
     if (f.kind == .choice and !f.kind.choice.multi) {
-        try renderChoiceSelectPill(h, base_path, table_id, spec, values, size, idx);
+        try renderChoiceSelectPill(h, base_path, table_id, spec, values, page, size, idx);
         return;
     }
 
@@ -847,6 +812,7 @@ fn renderChoiceSelectPill(
     table_id: []const u8,
     spec: []const FilterSpec,
     values: []const FilterValue,
+    page: usize,
     size: usize,
     idx: usize,
 ) !void {
@@ -862,7 +828,11 @@ fn renderChoiceSelectPill(
     try h.open(.form, .{ .class = cls });
     defer h.close(.form);
 
-    {
+    // The <select> always leads the pill so its native dropdown stays
+    // anchored to the pill's left edge in both states. When a value is set,
+    // the "Label:" prefix is overlaid on the select's left padding (absolute,
+    // see CSS) rather than pushing the select — and its dropdown — rightward.
+    if (selected) {
         try h.open(.span, .{ .class = "pill-label" });
         defer h.close(.span);
         try h.text(f.label);
@@ -872,22 +842,29 @@ fn renderChoiceSelectPill(
         try h.open(.select, .{
             .name = f.key,
             .class = "choice-pill-select",
+            .style = if (selected) try h.fmt("padding-left: calc({d}ch + 0.15rem);", .{f.label.len + 1}) else null,
             .aria = .{ .label = try h.fmt("Filter by {s}", .{f.label}) },
+            // Morph the swap (like the multi-select) so changing the value
+            // updates the pill in place instead of replacing the whole table
+            // region — avoids the flicker a plain outerHTML swap causes.
             .hx = .{
                 .get = base_path,
                 .target = hash_target,
-                .swap = "outerHTML",
+                .swap = "morph:outerHTML",
+                .ext = "morph",
                 .push_url = "true",
                 .include = "closest form",
             },
         });
         defer h.close(.select);
 
-        if (f.default_value == null) {
-            const none = v.choice == null or v.choice.?.len == 0;
-            try h.open(.option, .{ .value = "", .selected = if (none) true else null });
+        // Unset: a placeholder showing the field name keeps the closed
+        // <select> readable (not an empty box) while staying out of the open
+        // list — clearing is done with the ✕ below, not an "All" entry.
+        if (f.default_value == null and !selected) {
+            try h.open(.option, .{ .value = "", .selected = true, .disabled = true, .hidden = "" });
             defer h.close(.option);
-            try h.text("All");
+            try h.text(f.label);
         }
 
         for (c.options) |opt| {
@@ -900,6 +877,25 @@ fn renderChoiceSelectPill(
             defer h.close(.option);
             try h.text(opt.label);
         }
+    }
+
+    if (selected) {
+        var url_buf: [512]u8 = undefined;
+        const clear_url = buildUrlFromSpec(&url_buf, base_path, spec, values, page, size, .{ .clear_filter = .{ .key = f.key } });
+        try h.open(.a, .{
+            .class = "pill-clear",
+            .href = clear_url,
+            .hx = .{
+                .get = clear_url,
+                .target = hash_target,
+                .swap = "morph:outerHTML",
+                .ext = "morph",
+                .push_url = "true",
+            },
+            .title = "Remove filter",
+        });
+        defer h.close(.a);
+        try h.raw("&times;");
     }
 
     try renderHiddenFilterInputs(h, spec, values, f.key);
@@ -937,7 +933,6 @@ fn renderPillSummaryText(h: *Html, f: FilterSpec, v: FilterValue, selected: bool
         },
         .text_dropdown => try h.text(v.text_dropdown.?),
         .search => unreachable,
-        .tribool => |tb| try h.text(if (v.tribool.?) tb.yes_label else tb.no_label),
         .date_range => {
             const from = v.date_range.from orelse "";
             const to = v.date_range.to orelse "";
@@ -997,34 +992,6 @@ fn renderPillPopover(
 
             try renderHiddenFilterInputs(h, spec, values, f.key);
             try renderHiddenPagination(h, size);
-        },
-        .tribool => |tb| {
-            try h.open(.div, .{ .class = "dropdown-menu" });
-            defer h.close(.div);
-
-            const cur = v.tribool;
-            const choices = [_]struct { label: []const u8, value: []const u8, match: bool }{
-                .{ .label = tb.yes_label, .value = "true", .match = true },
-                .{ .label = tb.no_label, .value = "false", .match = false },
-            };
-            for (choices) |ch| {
-                const active = cur != null and cur.? == ch.match;
-                var url_buf: [512]u8 = undefined;
-                const url = buildUrlFromSpec(&url_buf, base_path, spec, values, page, size, .{ .set_filter = .{ .key = f.key, .value = ch.value } });
-                const cls: []const u8 = if (active) "menu-item is-active" else "menu-item";
-                try h.open(.a, .{
-                    .class = cls,
-                    .href = url,
-                    .hx = .{
-                        .get = url,
-                        .target = hash_target,
-                        .swap = "outerHTML",
-                        .push_url = "true",
-                    },
-                });
-                defer h.close(.a);
-                try h.text(ch.label);
-            }
         },
         .text_dropdown => |tx| {
             try h.open(.form, .{
@@ -1137,9 +1104,6 @@ fn renderHiddenFilterInputs(
             },
             .search => if (v.search) |s| if (s.len > 0) {
                 try h.open(.input, .{ .type = "hidden", .name = f.key, .value = s });
-            },
-            .tribool => if (v.tribool) |b| {
-                try h.open(.input, .{ .type = "hidden", .name = f.key, .value = if (b) "true" else "false" });
             },
             .date_range => {
                 if (v.date_range.from) |s| if (s.len > 0) {
@@ -1405,23 +1369,6 @@ test "buildUrlFromSpec: multi-choice toggle" {
     try std.testing.expectEqualStrings(
         "/x?page=1&size=50",
         buildUrlFromSpec(&buf, "/x", spec, values, 1, 50, .{ .set_filter = .{ .key = "types", .value = "a", .op = .toggle } }),
-    );
-}
-
-test "buildUrlFromSpec: tribool" {
-    const spec: []const FilterSpec = &.{
-        .{ .key = "flag", .label = "Flag", .pinned = true, .kind = .{ .tribool = .{} } },
-    };
-    var buf: [128]u8 = undefined;
-    const empty: []const FilterValue = &.{.{ .tribool = null }};
-    try std.testing.expectEqualStrings(
-        "/x?flag=true&page=1&size=50",
-        buildUrlFromSpec(&buf, "/x", spec, empty, 1, 50, .{ .set_filter = .{ .key = "flag", .value = "true" } }),
-    );
-    const set_true: []const FilterValue = &.{.{ .tribool = true }};
-    try std.testing.expectEqualStrings(
-        "/x?page=1&size=50",
-        buildUrlFromSpec(&buf, "/x", spec, set_true, 1, 50, .{ .clear_filter = .{ .key = "flag" } }),
     );
 }
 
