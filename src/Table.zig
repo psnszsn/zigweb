@@ -22,6 +22,10 @@ value_cell: ?*const fn (row: *zqlite.Row, column: []const u8, w: *std.Io.Writer)
 /// Current instant, used to resolve `date_range` filter presets.
 /// Null → presets are omitted. Set via `forRows`' `now` option.
 now: ?zeit.Instant = null,
+/// Set via the `colspan_fn` option to let a cell span multiple columns.
+/// Returns how many columns the cell for `column` occupies in this row
+/// (1 = normal); the spanned-over columns are skipped for that row.
+colspan: ?*const fn (row: *zqlite.Row, column: []const u8) usize = null,
 
 pub fn forRows(
     comptime QueryT: type,
@@ -38,6 +42,8 @@ pub fn forRows(
         size: usize,
         columns: []const ColumnSpec,
         now: ?zeit.Instant = null,
+        /// Built with `colspanAdapter(QueryT, fn)`; lets a cell span columns.
+        colspan_fn: ?*const fn (row: *zqlite.Row, column: []const u8) usize = null,
     },
 ) Table {
     const Iter = @typeInfo(@TypeOf(rows)).pointer.child;
@@ -78,7 +84,24 @@ pub fn forRows(
         .row_id_fn = if (rowIdFn != null) adapter.rid else null,
         .value_cell = if (valueCellFn != null) adapter.val else null,
         .now = opts.now,
+        .colspan = opts.colspan_fn,
     };
+}
+
+/// Erases a typed colspan function into the pointer `forRows`' `colspan_fn`
+/// option expects. `f` returns how many columns the cell for `field`
+/// occupies in a given row (1 = normal).
+pub fn colspanAdapter(
+    comptime QueryT: type,
+    comptime f: fn (QueryT.Row, std.meta.FieldEnum(QueryT.Cols)) usize,
+) *const fn (*zqlite.Row, []const u8) usize {
+    return struct {
+        fn wrap(slot: *zqlite.Row, column: []const u8) usize {
+            const r: QueryT.Row = .{ .row = slot.* };
+            const field = std.meta.stringToEnum(std.meta.FieldEnum(QueryT.Cols), column) orelse return 1;
+            return f(r, field);
+        }
+    }.wrap;
 }
 
 pub fn render(self: Table, h: *Html, total: usize) !void {
@@ -123,10 +146,20 @@ fn renderTableBody(self: Table, h: *Html) !void {
             try h.open(.tr, .{});
         }
         defer h.close(.tr);
-        for (self.columns) |col| {
-            try h.open(.td, .{});
-            defer h.close(.td);
-            try self.render_cell(&slot, col.name, h);
+        var ci: usize = 0;
+        while (ci < self.columns.len) {
+            const col = self.columns[ci];
+            const span: usize = if (self.colspan) |f| @max(1, f(&slot, col.name)) else 1;
+            {
+                if (span > 1) {
+                    try h.open(.td, .{ .colspan = try h.fmt("{d}", .{span}) });
+                } else {
+                    try h.open(.td, .{});
+                }
+                defer h.close(.td);
+                try self.render_cell(&slot, col.name, h);
+            }
+            ci += span;
         }
     }
 
