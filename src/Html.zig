@@ -99,6 +99,10 @@ fn writeAttrs(w: *Writer, attrs: anytype) !void {
             try writeAriaAttrs(w, @field(attrs, name));
             continue;
         }
+        if (comptime std.mem.eql(u8, name, "on")) {
+            try writeOnAttrs(w, @field(attrs, name));
+            continue;
+        }
         if (@field(attrs, name)) |val| {
             if (@TypeOf(val) == bool) {
                 if (val) try w.print(" {s}", .{name});
@@ -135,6 +139,16 @@ fn writeAriaAttrs(w: *Writer, aria: generated_attrs.Aria) !void {
                 break :blk arr;
             };
             try w.print(" {s}=\"", .{&wire});
+            try escapeAttr(w, val);
+            try w.writeAll("\"");
+        }
+    }
+}
+
+fn writeOnAttrs(w: *Writer, on: generated_attrs.On) !void {
+    inline for (@typeInfo(generated_attrs.On).@"struct".field_names) |name| {
+        if (@field(on, name)) |val| {
+            try w.print(" on{s}=\"", .{name});
             try escapeAttr(w, val);
             try w.writeAll("\"");
         }

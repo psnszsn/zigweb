@@ -11,6 +11,7 @@ const htmx_fields: []const []const u8 = &.{
 };
 
 const aria_prefix = "aria-";
+const on_prefix = "on";
 
 const tags: []const []const u8 = &.{
     "html",    "head",   "title",   "meta",    "link",   "body",
@@ -47,6 +48,13 @@ pub fn main(init: std.process.Init) void {
     }
     stdout.writeAll("};\n\n") catch return;
 
+    stdout.writeAll("pub const On = struct {\n") catch return;
+    for (Attribute.global.list) |named| {
+        if (!std.mem.startsWith(u8, named.name, on_prefix)) continue;
+        stdout.print("    @\"{s}\": ?[]const u8 = null,\n", .{named.name[on_prefix.len..]}) catch return;
+    }
+    stdout.writeAll("};\n\n") catch return;
+
     for (tags) |tag| {
         const kind = std.meta.stringToEnum(Ast.Kind, tag) orelse {
             stdout.print("pub const {s} = struct {{}};\n\n", .{tag}) catch return;
@@ -61,6 +69,7 @@ pub fn main(init: std.process.Init) void {
         for ([_][]const Attribute.Named{ elem_set.list, global_set.list }) |list| {
             for (list) |named| {
                 if (std.mem.startsWith(u8, named.name, aria_prefix)) continue;
+                if (std.mem.startsWith(u8, named.name, on_prefix)) continue;
                 const is_bool = named.model.rule == .bool;
                 const type_name: []const u8 = if (is_bool) "?bool" else "?[]const u8";
                 stdout.print("    @\"{s}\": {s} = null,\n", .{ named.name, type_name }) catch return;
@@ -69,6 +78,7 @@ pub fn main(init: std.process.Init) void {
 
         stdout.writeAll("    aria: Aria = .{},\n") catch return;
         stdout.writeAll("    hx: Hx = .{},\n") catch return;
+        stdout.writeAll("    on: On = .{},\n") catch return;
 
         stdout.writeAll("};\n\n") catch return;
     }
