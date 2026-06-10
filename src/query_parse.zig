@@ -102,48 +102,48 @@ fn decodeByte(raw: []const u8) struct { u8, usize } {
 }
 
 pub fn parseQueryInto(comptime T: type, raw: []const u8, buf: []u8) T {
-    const fields = std.meta.fields(T);
+    const s = @typeInfo(T).@"struct";
     var result: T = .{};
-    var seen: [fields.len]bool = @splat(false);
+    var seen: [s.field_names.len]bool = @splat(false);
     var cursor: usize = 0;
 
     var reader = std.Io.Reader.fixed(raw);
     var it = FormIterator.init(&reader);
     // `next` can only error here on a pair larger than `raw` — impossible.
     while (it.next() catch null) |pair| {
-        inline for (fields, 0..) |f, i| {
-            if (!seen[i] and pair.eql_key(f.name)) {
+        inline for (s.field_names, s.field_types, 0..) |name, FieldType, i| {
+            if (!seen[i] and pair.eql_key(name)) {
                 seen[i] = true;
-                switch (@typeInfo(f.type)) {
+                switch (@typeInfo(FieldType)) {
                     .optional => |o| {
                         const Child = o.child;
                         const child_info = @typeInfo(Child);
                         if (child_info == .pointer and child_info.pointer.child == u8) {
                             if (pair.raw_value.len == 0) {
-                                @field(result, f.name) = null;
+                                @field(result, name) = null;
                             } else {
                                 var w = std.Io.Writer.fixed(buf[cursor..]);
                                 _ = pair.value_reader.streamRemaining(&w) catch break;
-                                @field(result, f.name) = w.buffered();
+                                @field(result, name) = w.buffered();
                                 cursor += w.end;
                             }
                         } else if (Child == bool) {
                             // raw_value is fine — "true"/"false"/"0"/"1" never contain '+'/'%'.
                             if (std.mem.eql(u8, pair.raw_value, "true") or std.mem.eql(u8, pair.raw_value, "1")) {
-                                @field(result, f.name) = true;
+                                @field(result, name) = true;
                             } else if (std.mem.eql(u8, pair.raw_value, "false") or std.mem.eql(u8, pair.raw_value, "0")) {
-                                @field(result, f.name) = false;
+                                @field(result, name) = false;
                             }
                         } else {
                             @compileError("parseQueryInto: unsupported optional field type " ++ @typeName(Child));
                         }
                     },
                     .int => {
-                        if (std.fmt.parseInt(f.type, pair.raw_value, 10)) |n| {
-                            @field(result, f.name) = n;
+                        if (std.fmt.parseInt(FieldType, pair.raw_value, 10)) |n| {
+                            @field(result, name) = n;
                         } else |_| {}
                     },
-                    else => @compileError("parseQueryInto: unsupported field type " ++ @typeName(f.type) ++ " for field '" ++ f.name ++ "'"),
+                    else => @compileError("parseQueryInto: unsupported field type " ++ @typeName(FieldType) ++ " for field '" ++ name ++ "'"),
                 }
                 break;
             }

@@ -90,20 +90,20 @@ pub fn fmt(h: *Html, comptime f: []const u8, args: anytype) ![]const u8 {
 }
 
 fn writeAttrs(w: *Writer, attrs: anytype) !void {
-    inline for (@typeInfo(@TypeOf(attrs)).@"struct".fields) |f| {
-        if (comptime std.mem.eql(u8, f.name, "hx")) {
-            try writeHxAttrs(w, @field(attrs, f.name));
+    inline for (@typeInfo(@TypeOf(attrs)).@"struct".field_names) |name| {
+        if (comptime std.mem.eql(u8, name, "hx")) {
+            try writeHxAttrs(w, @field(attrs, name));
             continue;
         }
-        if (comptime std.mem.eql(u8, f.name, "aria")) {
-            try writeAriaAttrs(w, @field(attrs, f.name));
+        if (comptime std.mem.eql(u8, name, "aria")) {
+            try writeAriaAttrs(w, @field(attrs, name));
             continue;
         }
-        if (@field(attrs, f.name)) |val| {
+        if (@field(attrs, name)) |val| {
             if (@TypeOf(val) == bool) {
-                if (val) try w.print(" {s}", .{f.name});
+                if (val) try w.print(" {s}", .{name});
             } else {
-                try w.print(" {s}=\"", .{f.name});
+                try w.print(" {s}=\"", .{name});
                 try escapeAttr(w, val);
                 try w.writeAll("\"");
             }
@@ -112,10 +112,10 @@ fn writeAttrs(w: *Writer, attrs: anytype) !void {
 }
 
 fn writeHxAttrs(w: *Writer, hx: generated_attrs.Hx) !void {
-    inline for (@typeInfo(generated_attrs.Hx).@"struct".fields) |f| {
-        if (@field(hx, f.name)) |val| {
+    inline for (@typeInfo(generated_attrs.Hx).@"struct".field_names) |name| {
+        if (@field(hx, name)) |val| {
             const wire = comptime blk: {
-                var arr: [3 + f.name.len]u8 = ("hx-" ++ f.name).*;
+                var arr: [3 + name.len]u8 = ("hx-" ++ name).*;
                 std.mem.replaceScalar(u8, &arr, '_', '-');
                 break :blk arr;
             };
@@ -127,10 +127,10 @@ fn writeHxAttrs(w: *Writer, hx: generated_attrs.Hx) !void {
 }
 
 fn writeAriaAttrs(w: *Writer, aria: generated_attrs.Aria) !void {
-    inline for (@typeInfo(generated_attrs.Aria).@"struct".fields) |f| {
-        if (@field(aria, f.name)) |val| {
+    inline for (@typeInfo(generated_attrs.Aria).@"struct".field_names) |name| {
+        if (@field(aria, name)) |val| {
             const wire = comptime blk: {
-                var arr: [5 + f.name.len]u8 = ("aria-" ++ f.name).*;
+                var arr: [5 + name.len]u8 = ("aria-" ++ name).*;
                 std.mem.replaceScalar(u8, &arr, '_', '-');
                 break :blk arr;
             };

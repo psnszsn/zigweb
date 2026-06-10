@@ -11,11 +11,11 @@
             .hash = "cbor-1.0.0-RcQE_HQwAQCukORH_t6Aa2AGQ7igyWCHpjj6dYf2ivQJ",
         },
         .zeit = .{
-            .url = "git+https://github.com/rockorager/zeit#2a79678e05e4e82cd4efd4fd6b754dcf029c3a64",
-            .hash = "zeit-0.6.0-5I6bk7q6AgBdMJxze3D4l9ylQhkviQ_BX9FigDt13MFn",
+            .url = "git+https://github.com/rockorager/zeit#905396257dcf0b1bfa3c0e8265657a0e748105ad",
+            .hash = "zeit-0.10.0-dev-5I6bk3m9AgB8Ndev81pibV70MJe9VCOXAGZBNU833c4Y",
         },
     },
-    .minimum_zig_version = "0.16.0-dev.2821+3edaef9e0",
+    .minimum_zig_version = "0.17.0-dev.704+b8cb78023",
     .paths = .{
         "src",
         "web",

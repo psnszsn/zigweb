@@ -56,11 +56,12 @@ pub fn fatal(db: Database, src: std.builtin.SourceLocation) noreturn {
 /// Queries should be deinited when disconnecting from the database.
 pub fn initQueries(db: Database, Queries: type) Queries {
     var qs: Queries = undefined;
-    inline for (@typeInfo(Queries).@"struct".fields) |f| {
-        @field(qs, f.name) = f.type.init(db) catch {
+    const info = @typeInfo(Queries).@"struct";
+    inline for (info.field_names, info.field_types) |name, FieldType| {
+        @field(qs, name) = FieldType.init(db) catch {
             log.err("Error caused by {s}, query name: {s}", .{
                 @typeName(Queries),
-                f.name,
+                name,
             });
             db.fatal(@src());
         };
@@ -69,8 +70,8 @@ pub fn initQueries(db: Database, Queries: type) Queries {
 }
 
 pub inline fn deinitQueries(_: Database, Queries: type, qs: *const Queries) void {
-    inline for (@typeInfo(Queries).@"struct".fields) |f| {
-        @field(qs, f.name).deinit();
+    inline for (@typeInfo(Queries).@"struct".field_names) |name| {
+        @field(qs, name).deinit();
     }
 }
 
@@ -192,8 +193,8 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
                     if (!isTuple(config.args)) {
                         std.debug.panic("positional ? SQL parameters require tuple args", .{});
                     }
-                    inline for (@typeInfo(config.args).@"struct".fields, 0..) |f, idx| {
-                        bindArgValue(stmt, db, @field(args, f.name), idx);
+                    inline for (@typeInfo(config.args).@"struct".field_names, 0..) |name, idx| {
+                        bindArgValue(stmt, db, @field(args, name), idx);
                     }
                 },
                 .named => {
@@ -201,10 +202,10 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
                         std.debug.panic("named :name SQL parameters require struct args", .{});
                     }
                     validateNamedParameters(stmt, config.args);
-                    inline for (@typeInfo(config.args).@"struct".fields) |f| {
-                        const bound = bindNamedArg(stmt, db, f.name, @field(args, f.name));
+                    inline for (@typeInfo(config.args).@"struct".field_names) |name| {
+                        const bound = bindNamedArg(stmt, db, name, @field(args, name));
                         if (bound == 0) {
-                            std.debug.panic("named SQL parameter :{s} has no matching placeholder in query", .{f.name});
+                            std.debug.panic("named SQL parameter :{s} has no matching placeholder in query", .{name});
                         }
                     }
                 },
@@ -217,11 +218,11 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
             return switch (@typeInfo(T)) {
                 .@"struct" => |info| blk: {
                     if (info.is_tuple) break :blk true;
-                    inline for (info.fields, 0..) |f, i| {
-                        const idx = std.fmt.parseInt(usize, f.name, 10) catch break :blk false;
+                    inline for (info.field_names, 0..) |name, i| {
+                        const idx = std.fmt.parseInt(usize, name, 10) catch break :blk false;
                         if (idx != i) break :blk false;
                     }
-                    break :blk info.fields.len != 0 or @sizeOf(T) == 0;
+                    break :blk info.field_names.len != 0 or @sizeOf(T) == 0;
                 },
                 else => false,
             };
@@ -272,8 +273,8 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
         }
 
         fn hasArgField(Args: type, name: []const u8) bool {
-            inline for (@typeInfo(Args).@"struct".fields) |f| {
-                if (std.mem.eql(u8, f.name, name)) return true;
+            inline for (@typeInfo(Args).@"struct".field_names) |field_name| {
+                if (std.mem.eql(u8, field_name, name)) return true;
             }
             return false;
         }

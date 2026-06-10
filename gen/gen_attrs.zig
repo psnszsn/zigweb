@@ -1,7 +1,7 @@
 const std = @import("std");
-const superhtml_html = @import("superhtml").html;
-const Ast = superhtml_html.Ast;
-const Attribute = superhtml_html.Attribute;
+const superhtml = @import("superhtml_attrs");
+const Ast = superhtml.Ast;
+const Attribute = superhtml.Attribute;
 
 const htmx_fields: []const []const u8 = &.{
     "get",     "post",    "put",          "delete",      "patch",
@@ -10,9 +10,7 @@ const htmx_fields: []const []const u8 = &.{
     "sync",    "boost",   "disabled_elt", "preserve",    "ext",
 };
 
-const aria_fields: []const []const u8 = &.{
-    "label",
-};
+const aria_prefix = "aria-";
 
 const tags: []const []const u8 = &.{
     "html",    "head",   "title",   "meta",    "link",   "body",
@@ -43,8 +41,9 @@ pub fn main(init: std.process.Init) void {
     stdout.writeAll("};\n\n") catch return;
 
     stdout.writeAll("pub const Aria = struct {\n") catch return;
-    for (aria_fields) |aria_name| {
-        stdout.print("    {s}: ?[]const u8 = null,\n", .{aria_name}) catch return;
+    for (Attribute.global.list) |named| {
+        if (!std.mem.startsWith(u8, named.name, aria_prefix)) continue;
+        stdout.print("    {s}: ?[]const u8 = null,\n", .{named.name[aria_prefix.len..]}) catch return;
     }
     stdout.writeAll("};\n\n") catch return;
 
@@ -61,6 +60,7 @@ pub fn main(init: std.process.Init) void {
 
         for ([_][]const Attribute.Named{ elem_set.list, global_set.list }) |list| {
             for (list) |named| {
+                if (std.mem.startsWith(u8, named.name, aria_prefix)) continue;
                 const is_bool = named.model.rule == .bool;
                 const type_name: []const u8 = if (is_bool) "?bool" else "?[]const u8";
                 stdout.print("    @\"{s}\": {s} = null,\n", .{ named.name, type_name }) catch return;

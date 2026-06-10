@@ -18,11 +18,11 @@ pub fn initTables(comptime Tables: type, conn: zqlite.Conn) !void {
     try conn.transaction();
     errdefer conn.rollback();
 
-    inline for (comptime std.meta.declarations(Tables)) |d| {
-        const table = @field(Tables, d.name);
+    inline for (comptime std.meta.declarations(Tables)) |decl_name| {
+        const table = @field(Tables, decl_name);
         if (@TypeOf(table) != Table) continue;
 
-        errdefer log.err("error creating table {s}", .{d.name});
+        errdefer log.err("error creating table {s}", .{decl_name});
 
         try conn.execNoArgs(table.schema);
 

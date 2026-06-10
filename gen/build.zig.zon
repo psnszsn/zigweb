@@ -3,11 +3,11 @@
     .version = "0.0.1",
     .dependencies = .{
         .superhtml = .{
-            .url = "git+https://github.com/psnszsn/superhtml.git#06015aae1853b3f7e7accdf1d91102502ed8e322",
-            .hash = "superhtml-0.6.2-Y7MdPJs8JABdlTsY4NiF4WQ3zZquGoWzN0r7qUh9kHBh",
+            .url = "git+https://github.com/kristoff-it/superhtml.git#0ee7c967efa17321b5b054140e58d9e8e83a521a",
+            .hash = "superhtml-0.7.0-Y7MdPE2BJgAnmcpIXg5gwI5AobHRTnauvEfhVJyE0NWZ",
         },
     },
-    .minimum_zig_version = "0.16.0-dev.2821+3edaef9e0",
+    .minimum_zig_version = "0.17.0-dev.702+18b3c78a9",
     .paths = .{""},
     .fingerprint = 0x59d70a39d389e5,
 }

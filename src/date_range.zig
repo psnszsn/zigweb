@@ -138,7 +138,7 @@ pub fn renderDropdown(h: *Html, cfg: Dropdown) !void {
 }
 
 test presets {
-    const inst = try zeit.instant(std.testing.io, .{ .source = .{ .iso8601 = "2026-05-22T12:00:00Z" } });
+    const inst = try zeit.instantFromText(.iso8601, "2026-05-22T12:00:00Z", &zeit.utc);
     var buf: [256]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buf);
     const p = try presets(fba.allocator(), inst);
