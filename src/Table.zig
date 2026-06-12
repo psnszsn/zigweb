@@ -850,8 +850,7 @@ fn renderChoiceSelectPill(
             .hx = .{
                 .get = base_path,
                 .target = hash_target,
-                .swap = "morph:outerHTML",
-                .ext = "morph",
+                .swap = "outerMorph",
                 .push_url = "true",
                 .include = "closest form",
             },
@@ -888,8 +887,7 @@ fn renderChoiceSelectPill(
             .hx = .{
                 .get = clear_url,
                 .target = hash_target,
-                .swap = "morph:outerHTML",
-                .ext = "morph",
+                .swap = "outerMorph",
                 .push_url = "true",
             },
             .title = "Remove filter",
@@ -972,8 +970,7 @@ fn renderPillPopover(
                     .hx = .{
                         .get = base_path,
                         .target = hash_target,
-                        .swap = "morph:outerHTML",
-                        .ext = "morph",
+                        .swap = "outerMorph",
                         .replace_url = "true",
                         .include = "closest form",
                     },

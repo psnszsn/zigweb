@@ -116,17 +116,29 @@ fn writeAttrs(w: *Writer, attrs: anytype) !void {
 }
 
 fn writeHxAttrs(w: *Writer, hx: generated_attrs.Hx) !void {
+    // The `?[]const u8` gate skips the non-string `inherited`/`status` fields.
     inline for (@typeInfo(generated_attrs.Hx).@"struct".field_names) |name| {
-        if (@field(hx, name)) |val| {
-            const wire = comptime blk: {
-                var arr: [3 + name.len]u8 = ("hx-" ++ name).*;
-                std.mem.replaceScalar(u8, &arr, '_', '-');
-                break :blk arr;
-            };
-            try w.print(" {s}=\"", .{&wire});
-            try escapeAttr(w, val);
-            try w.writeAll("\"");
+        if (comptime @TypeOf(@field(hx, name)) == ?[]const u8) {
+            if (@field(hx, name)) |val| {
+                const wire = comptime blk: {
+                    var arr: [3 + name.len]u8 = ("hx-" ++ name).*;
+                    std.mem.replaceScalar(u8, &arr, '_', '-');
+                    break :blk arr;
+                };
+                try w.print(" {s}", .{&wire});
+                if (comptime @hasField(generated_attrs.Inherited, name)) {
+                    if (@field(hx.inherited, name)) try w.writeAll(":inherited");
+                }
+                try w.writeAll("=\"");
+                try escapeAttr(w, val);
+                try w.writeAll("\"");
+            }
         }
+    }
+    for (hx.status) |rule| {
+        try w.print(" hx-status:{s}=\"", .{rule[0]});
+        try escapeAttr(w, rule[1]);
+        try w.writeAll("\"");
     }
 }
 
