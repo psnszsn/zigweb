@@ -53,7 +53,8 @@ pub const credentials: Table = .{
     \\  id          INTEGER PRIMARY KEY,
     \\  cred_id     BLOB NOT NULL UNIQUE,
     \\  public_key  BLOB NOT NULL,
-    \\  created     INTEGER NOT NULL DEFAULT (unixepoch())
+    \\  created     INTEGER NOT NULL DEFAULT (unixepoch()),
+    \\  last_seen   INTEGER
     \\);
     ,
 };
