@@ -195,12 +195,25 @@ pub fn migrateSchema(comptime Tables: type, gpa: Allocator, conn: zqlite.Conn) !
             // Views aren't schema-owned by any table here (they often live
             // in app bootstrap code, created at runtime), so we always
             // recreate what we dropped rather than cross-checking against
-            // a pristine list.
-            for (referencing_views) |view| {
-                conn.execNoArgs(view.sql) catch |err| {
-                    log.err("failed to recreate view '{s}': {}", .{ view.name, err });
+            // a pristine list. Retry passes handle view-on-view ordering:
+            // a view whose parent isn't back yet fails this pass and
+            // succeeds in a later one; a full pass with no progress means
+            // a genuinely broken view.
+            var remaining = referencing_views;
+            while (remaining.len > 0) {
+                var kept: usize = 0;
+                for (remaining) |view| {
+                    if (conn.execNoArgs(view.sql)) |_| {} else |err| {
+                        log.warn("view '{s}' not recreatable yet: {}", .{ view.name, err });
+                        remaining[kept] = view;
+                        kept += 1;
+                    }
+                }
+                if (kept == remaining.len) {
+                    log.err("failed to recreate {d} view(s), first: '{s}'", .{ kept, remaining[0].name });
                     return error.MigrateFailed;
-                };
+                }
+                remaining = remaining[0..kept];
             }
 
             // Step 10: Verify foreign key constraints
@@ -403,25 +416,51 @@ fn getAllTriggersReferencing(arena: Allocator, conn: zqlite.Conn, table_name: []
 /// table), so a simple tbl_name match wouldn't find them. We substring-
 /// match against the SQL body, mirroring getAllTriggersReferencing.
 fn getAllViewsReferencing(arena: Allocator, conn: zqlite.Conn, table_name: []const u8) ![]Dependent {
-    var rows = try conn.rows(
-        \\SELECT name, sql FROM sqlite_schema
-        \\WHERE type = 'view' AND sql IS NOT NULL
-    , .{});
-    defer rows.deinit();
-
-    var list: std.ArrayList(Dependent) = .empty;
-    while (rows.next()) |row| {
-        const sql = try arena.dupe(u8, row.text(1));
-        if (std.mem.find(u8, sql, table_name) != null) {
-            try list.append(arena, .{
+    var all: std.ArrayList(Dependent) = .empty;
+    {
+        var rows = try conn.rows(
+            \\SELECT name, sql FROM sqlite_schema
+            \\WHERE type = 'view' AND sql IS NOT NULL
+        , .{});
+        defer rows.deinit();
+        while (rows.next()) |row| {
+            try all.append(arena, .{
                 .dep_type = "view",
                 .name = try arena.dupe(u8, row.text(0)),
                 .sql = try arena.dupeSentinel(u8, row.text(1), 0),
             });
         }
+        if (rows.err) |err| return err;
     }
-    if (rows.err) |err| return err;
-    return try list.toOwnedSlice(arena);
+
+    // Transitive closure: a view referencing the table directly AND any
+    // view referencing one of the collected views (step 7's RENAME
+    // reparses EVERY stored view, so a view-on-view left in place fails
+    // with "no such table" once its parent view is dropped). Each pass
+    // appends the direct dependents of the already-collected set, so
+    // the result is in dependency order for recreation.
+    var included: std.ArrayList(Dependent) = .empty;
+    var changed = true;
+    while (changed) {
+        changed = false;
+        outer: for (all.items) |view| {
+            for (included.items) |inc| {
+                if (std.mem.eql(u8, inc.name, view.name)) continue :outer;
+            }
+            var references = std.mem.find(u8, view.sql, table_name) != null;
+            if (!references) for (included.items) |inc| {
+                if (std.mem.find(u8, view.sql, inc.name) != null) {
+                    references = true;
+                    break;
+                }
+            };
+            if (references) {
+                try included.append(arena, view);
+                changed = true;
+            }
+        }
+    }
+    return try included.toOwnedSlice(arena);
 }
 
 // -- Comparison helpers --
