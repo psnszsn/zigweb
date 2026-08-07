@@ -40,6 +40,7 @@ pub const Hx = struct {
     disable: ?[]const u8 = null,
     preserve: ?[]const u8 = null,
     encoding: ?[]const u8 = null,
+    indicator: ?[]const u8 = null,
     inherited: Inherited = .{},
     status: []const StatusRule = &.{},
 };
