@@ -24,6 +24,9 @@ pub const Config = struct {
     rp_id: []const u8,
     debug_bypass: bool = false,
     secure_cookie: bool = true,
+    /// When set, session cookies carry `Domain=<value>` so subdomains
+    /// (e.g. a forward_auth-gated service) receive them too.
+    cookie_domain: ?[]const u8 = null,
 };
 
 config: Config,
@@ -494,9 +497,14 @@ pub const Ctx = struct {
         }) catch db.fatal(@src());
 
         const token_hex = std.fmt.bytesToHex(token, .lower);
-        var cookie_buf: [128]u8 = undefined;
+        var cookie_buf: [256]u8 = undefined;
+        var domain_buf: [96]u8 = undefined;
         const secure_suffix: []const u8 = if (auth.config.secure_cookie) "; Secure" else "";
-        const cookie = std.fmt.bufPrint(&cookie_buf, "session={s}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000{s}", .{ token_hex, secure_suffix }) catch unreachable;
+        const domain_suffix: []const u8 = if (auth.config.cookie_domain) |d|
+            std.fmt.bufPrint(&domain_buf, "; Domain={s}", .{d}) catch unreachable
+        else
+            "";
+        const cookie = std.fmt.bufPrint(&cookie_buf, "session={s}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000{s}{s}", .{ token_hex, secure_suffix, domain_suffix }) catch unreachable;
 
         log.info("Login successful, session created", .{});
 
@@ -516,11 +524,20 @@ pub const Ctx = struct {
             }) catch ctx.db.fatal(@src());
         }
 
+        // The clear must repeat the Domain attribute or a domain-scoped
+        // session cookie survives logout.
+        var cookie_buf: [192]u8 = undefined;
+        var domain_buf: [96]u8 = undefined;
+        const domain_suffix: []const u8 = if (ctx.auth.config.cookie_domain) |d|
+            std.fmt.bufPrint(&domain_buf, "; Domain={s}", .{d}) catch unreachable
+        else
+            "";
+        const cookie = std.fmt.bufPrint(&cookie_buf, "session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0{s}", .{domain_suffix}) catch unreachable;
         try request.respond("", .{
             .status = .see_other,
             .extra_headers = &.{
                 .{ .name = "location", .value = "/" },
-                .{ .name = "set-cookie", .value = "session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0" },
+                .{ .name = "set-cookie", .value = cookie },
             },
         });
     }
