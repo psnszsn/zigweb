@@ -625,20 +625,35 @@ fn getSessionCookie(request: *std.http.Server.Request) ?[]const u8 {
     var iter = request.iterateHeaders();
     while (iter.next()) |header| {
         if (std.ascii.eqlIgnoreCase(header.name, "cookie")) {
-            // Find session=<32 hex chars>, ensuring it's a full cookie name
-            var search_from: usize = 0;
-            while (std.mem.indexOfPos(u8, header.value, search_from, "session=")) |pos| {
-                if (pos == 0 or std.mem.eql(u8, header.value[pos - 2 .. pos], "; ")) {
-                    const start = pos + "session=".len;
-                    if (header.value.len >= start + 32) {
-                        return header.value[start .. start + 32];
-                    }
-                }
-                search_from = pos + 1;
-            }
+            if (getSessionCookieValue(header.value)) |value| return value;
         }
     }
     return null;
+}
+
+fn getSessionCookieValue(header_value: []const u8) ?[]const u8 {
+    // Find session=<32 hex chars>, ensuring it's a full cookie name.
+    var search_from: usize = 0;
+    while (std.mem.indexOfPos(u8, header_value, search_from, "session=")) |pos| {
+        if (pos == 0 or (pos >= 2 and std.mem.eql(u8, header_value[pos - 2 .. pos], "; "))) {
+            const start = pos + "session=".len;
+            if (header_value.len >= start + 32) {
+                return header_value[start .. start + 32];
+            }
+        }
+        search_from = pos + 1;
+    }
+    return null;
+}
+
+test "session cookie delimiter check handles match at byte offset one" {
+    try std.testing.expectEqual(null, getSessionCookieValue("xsession=0123456789abcdef0123456789abcdef"));
+}
+
+test "session cookie is accepted at the start or after a delimiter" {
+    const token = "0123456789abcdef0123456789abcdef";
+    try std.testing.expectEqualStrings(token, getSessionCookieValue("session=" ++ token).?);
+    try std.testing.expectEqualStrings(token, getSessionCookieValue("other=x; session=" ++ token).?);
 }
 
 fn readBody(request: *std.http.Server.Request, read_buf: []u8, body_buf: []u8) ?[]const u8 {
