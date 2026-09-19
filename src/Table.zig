@@ -732,8 +732,8 @@ fn renderFilterPill(
     var name_buf: [80]u8 = undefined;
     const details_name = std.fmt.bufPrint(&name_buf, "filter-bar-{s}", .{table_id}) catch "filter-bar";
 
+    const multi = f.kind == .choice and f.kind.choice.multi;
     {
-        const multi = f.kind == .choice and f.kind.choice.multi;
         try h.open(.details, .{
             .class = "filter-details",
             .name = details_name,
@@ -748,6 +748,19 @@ fn renderFilterPill(
         }
 
         try renderPillPopover(h, base_path, hash_target, spec, values, page, size, idx, now);
+    }
+
+    // Touch devices collapse a <select multiple> to one row and open their
+    // own picker for it, so the popover would only be an extra tap. This
+    // second select is laid invisibly over the pill by the stylesheet under
+    // `@media (pointer: coarse)` (and hidden otherwise): a tap on the pill
+    // opens the native picker directly and the popover is never reached.
+    if (multi) {
+        try h.open(.form, .{ .class = "pill-native-multi" });
+        defer h.close(.form);
+        try renderMultiSelect(h, base_path, hash_target, f, v, .{ .class = "pill-native-select" });
+        try renderHiddenFilterInputs(h, spec, values, f.key);
+        try renderHiddenPagination(h, size);
     }
 
     if (selected) {
@@ -941,6 +954,41 @@ fn renderPillSummaryText(h: *Html, f: FilterSpec, v: FilterValue, selected: bool
     }
 }
 
+/// The `<select multiple>` of a multi-choice filter; applies on change.
+fn renderMultiSelect(
+    h: *Html,
+    base_path: []const u8,
+    hash_target: []const u8,
+    f: FilterSpec,
+    v: FilterValue,
+    opts: struct { class: []const u8, size: ?[]const u8 = null },
+) !void {
+    try h.open(.select, .{
+        .name = f.key,
+        .multiple = true,
+        .size = opts.size,
+        .class = opts.class,
+        .aria = .{ .label = try h.fmt("Filter by {s}", .{f.label}) },
+        .hx = .{
+            .get = base_path,
+            .target = hash_target,
+            .swap = "outerMorph",
+            .replace_url = "true",
+            .include = "closest form",
+        },
+    });
+    defer h.close(.select);
+    for (f.kind.choice.options) |opt| {
+        try h.open(.option, .{
+            .value = opt.value,
+            .selected = if (choiceContains(v.choice, opt.value)) true else null,
+            .title = opt.description,
+        });
+        defer h.close(.option);
+        try h.text(opt.label);
+    }
+}
+
 fn renderPillPopover(
     h: *Html,
     base_path: []const u8,
@@ -960,32 +1008,10 @@ fn renderPillPopover(
             try h.open(.form, .{ .class = "filter-form filter-form-choice" });
             defer h.close(.form);
 
-            {
-                try h.open(.select, .{
-                    .name = f.key,
-                    .multiple = true,
-                    .size = try h.fmt("{d}", .{@min(c.options.len, 8)}),
-                    .class = "filter-select filter-select-multi",
-                    .aria = .{ .label = try h.fmt("Filter by {s}", .{f.label}) },
-                    .hx = .{
-                        .get = base_path,
-                        .target = hash_target,
-                        .swap = "outerMorph",
-                        .replace_url = "true",
-                        .include = "closest form",
-                    },
-                });
-                defer h.close(.select);
-                for (c.options) |opt| {
-                    try h.open(.option, .{
-                        .value = opt.value,
-                        .selected = if (choiceContains(v.choice, opt.value)) true else null,
-                        .title = opt.description,
-                    });
-                    defer h.close(.option);
-                    try h.text(opt.label);
-                }
-            }
+            try renderMultiSelect(h, base_path, hash_target, f, v, .{
+                .class = "filter-select filter-select-multi",
+                .size = try h.fmt("{d}", .{@min(c.options.len, 8)}),
+            });
 
             try renderHiddenFilterInputs(h, spec, values, f.key);
             try renderHiddenPagination(h, size);
