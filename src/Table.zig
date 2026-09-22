@@ -975,6 +975,8 @@ fn renderMultiSelect(
             .swap = "outerMorph",
             .replace_url = "true",
             .include = "closest form",
+            .trigger = "change delay:200ms",
+            .sync = "this:replace",
         },
     });
     defer h.close(.select);
