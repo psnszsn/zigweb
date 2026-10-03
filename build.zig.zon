@@ -3,8 +3,8 @@
     .version = "0.0.1",
     .dependencies = .{
         .zqlite = .{
-            .url = "git+https://github.com/karlseguin/zqlite.zig#59ce8b2abe0e2549515c4dea5a21d32190b0e878",
-            .hash = "zqlite-0.0.1-RWLaY4Q-nAD2ZT0sL0IHyaVAOsD3EowOJYw6Dsf9xNJm",
+            .url = "git+https://github.com/karlseguin/zqlite.zig#3a4ec07c373b181a739a47a331f86289352fee57",
+            .hash = "zqlite-0.0.1-RWLaYz49nABcCXlOV690EXRLoexKyFDB9lCr5rsYfMQf",
         },
         .cbor = .{
             .url = "git+https://github.com/neurocyte/cbor#defb24a36aa497473636c653a4eb4bc92b6a65b5",
@@ -15,7 +15,7 @@
             .hash = "zeit-0.10.0-dev-5I6bk3m9AgB8Ndev81pibV70MJe9VCOXAGZBNU833c4Y",
         },
     },
-    .minimum_zig_version = "0.17.0-dev.1516+8a4b5424d",
+    .minimum_zig_version = "0.17.0",
     .paths = .{
         "src",
         "web",
