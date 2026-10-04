@@ -456,17 +456,25 @@ pub const Ctx = struct {
             return;
         }
 
-        const cred_row = row.?;
-        defer cred_row.deinit();
-        const cred_db_id = cred_row.get(.id);
-        const sec1_blob = cred_row.textNoDupe(.public_key);
+        // Copy the credential out and release the cursor before the session
+        // insert below. A cursor left open pins this connection's read
+        // snapshot; if any other connection commits in between, the insert
+        // fails at once with SQLITE_BUSY_SNAPSHOT, which busy_timeout never
+        // retries.
+        var sec1: [65]u8 = undefined;
+        const cred_db_id = blk: {
+            const cred_row = row.?;
+            defer cred_row.deinit();
+            const sec1_blob = cred_row.textNoDupe(.public_key);
+            if (sec1_blob.len != sec1.len) {
+                try request.respond("Corrupted credential", .{ .status = .internal_server_error });
+                return;
+            }
+            @memcpy(&sec1, sec1_blob);
+            break :blk cred_row.get(.id);
+        };
 
-        if (sec1_blob.len != 65) {
-            try request.respond("Corrupted credential", .{ .status = .internal_server_error });
-            return;
-        }
-
-        const pub_key = EcdsaP256Sha256.PublicKey.fromSec1(sec1_blob[0..65]) catch {
+        const pub_key = EcdsaP256Sha256.PublicKey.fromSec1(&sec1) catch {
             try request.respond("Corrupted credential key", .{ .status = .internal_server_error });
             return;
         };
