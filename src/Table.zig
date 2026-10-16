@@ -126,7 +126,7 @@ fn renderTableBody(self: Table, h: *Html) !void {
         try h.open(.tr, .{});
         defer h.close(.tr);
         for (self.columns) |col| {
-            try h.open(.th, .{});
+            try h.open(.th, .{ .class = col.class });
             defer h.close(.th);
             try h.text(col.header);
         }
@@ -151,11 +151,10 @@ fn renderTableBody(self: Table, h: *Html) !void {
             const col = self.columns[ci];
             const span: usize = if (self.colspan) |f| @max(1, f(&slot, col.name)) else 1;
             {
-                if (span > 1) {
-                    try h.open(.td, .{ .colspan = try h.fmt("{d}", .{span}) });
-                } else {
-                    try h.open(.td, .{});
-                }
+                try h.open(.td, .{
+                    .class = col.class,
+                    .colspan = if (span > 1) try h.fmt("{d}", .{span}) else null,
+                });
                 defer h.close(.td);
                 try self.render_cell(&slot, col.name, h);
             }
@@ -164,12 +163,45 @@ fn renderTableBody(self: Table, h: *Html) !void {
     }
 
     if (!any) {
-        try h.open(.tr, .{});
+        try h.open(.tr, .{ .class = "empty-row" });
         defer h.close(.tr);
         try h.open(.td, .{ .colspan = try h.fmt("{d}", .{self.columns.len}) });
         defer h.close(.td);
-        try h.text("No results");
+        try self.renderEmptyState(h);
     }
+}
+
+/// Says which filters left the table empty, defaults included, since a
+/// default leaves no pill value to read it from.
+fn renderEmptyState(self: Table, h: *Html) !void {
+    try h.text("No results");
+    var listed: usize = 0;
+    var clearable = false;
+    for (self.filters_spec, self.filter_values[0..self.filters_spec.len]) |f, v| {
+        const selected = filterSelected(f, v);
+        if (selected) clearable = true;
+        if (!selected and f.default_value == null) continue;
+        try h.text(if (listed == 0) " for " else " · ");
+        listed += 1;
+        try h.text(f.label);
+        try h.text(": ");
+        if (selected) {
+            try renderFilterValueText(h, f, v);
+        } else {
+            try renderDefaultText(h, f);
+        }
+    }
+    if (!clearable) return;
+    var hash_buf: [64]u8 = undefined;
+    const hash_target = std.fmt.bufPrint(&hash_buf, "#{s}", .{self.table_id}) catch self.table_id;
+    try h.text(". ");
+    try h.open(.a, .{
+        .href = self.base_path,
+        .class = "empty-clear",
+        .hx = .{ .get = self.base_path, .target = hash_target, .swap = "outerHTML", .push_url = "true" },
+    });
+    defer h.close(.a);
+    try h.text("Clear filters");
 }
 
 pub const PaginationSpec = struct {
@@ -916,6 +948,12 @@ fn renderChoiceSelectPill(
 fn renderPillSummaryText(h: *Html, f: FilterSpec, v: FilterValue, selected: bool) !void {
     if (!selected) {
         try h.text(f.label);
+        if (f.default_value != null) {
+            try h.text(":");
+            try h.open(.span, .{ .class = "pill-default" });
+            defer h.close(.span);
+            try renderDefaultText(h, f);
+        }
         return;
     }
     {
@@ -925,25 +963,36 @@ fn renderPillSummaryText(h: *Html, f: FilterSpec, v: FilterValue, selected: bool
         try h.text(":");
     }
     try h.text(" ");
+    try renderFilterValueText(h, f, v);
+}
+
+fn renderDefaultText(h: *Html, f: FilterSpec) !void {
+    const dv = f.default_value.?;
     switch (f.kind) {
-        .choice => |c| {
-            const csv = v.choice.?;
-            if (c.multi) {
-                var it = std.mem.tokenizeScalar(u8, csv, ',');
-                var n: usize = 0;
-                var shown: usize = 0;
-                while (it.next()) |tok| : (n += 1) {
-                    if (shown < 2) {
-                        if (shown > 0) try h.text(", ");
-                        try h.text(choiceLabelOf(c.options, tok));
-                        shown += 1;
-                    }
-                }
-                if (n > shown) try h.print(", +{d}", .{n - shown});
-            } else try h.text(choiceLabelOf(c.options, csv));
-        },
+        .choice => |c| try renderChoiceLabels(h, c.options, dv),
+        else => try h.text(dv),
+    }
+}
+
+fn renderChoiceLabels(h: *Html, options: []const ChoiceOption, csv: []const u8) !void {
+    var it = std.mem.tokenizeScalar(u8, csv, ',');
+    var n: usize = 0;
+    var shown: usize = 0;
+    while (it.next()) |tok| : (n += 1) {
+        if (shown < 2) {
+            if (shown > 0) try h.text(", ");
+            try h.text(choiceLabelOf(options, tok));
+            shown += 1;
+        }
+    }
+    if (n > shown) try h.print(", +{d}", .{n - shown});
+}
+
+fn renderFilterValueText(h: *Html, f: FilterSpec, v: FilterValue) !void {
+    switch (f.kind) {
+        .choice => |c| try renderChoiceLabels(h, c.options, v.choice.?),
         .text_dropdown => try h.text(v.text_dropdown.?),
-        .search => unreachable,
+        .search => try h.text(v.search.?),
         .date_range => {
             const from = v.date_range.from orelse "";
             const to = v.date_range.to orelse "";
@@ -1153,6 +1202,8 @@ fn renderHiddenFilterInputs(
 pub const ColumnSpec = struct {
     name: []const u8,
     header: []const u8,
+    /// Set on the column's `<th>` and every `<td>`, e.g. for alignment.
+    class: ?[]const u8 = null,
 };
 
 pub fn renderSpecPagination(
