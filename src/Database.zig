@@ -1,5 +1,6 @@
 const Database = @This();
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const zqlite = @import("zqlite");
 
@@ -57,18 +58,28 @@ pub fn fatal(db: Database, src: std.builtin.SourceLocation) noreturn {
 ///
 ///     var tx = try db.begin();
 ///     defer tx.end(); // rolls back unless committed
-///     ...queries take `tx` where they take a Database...
+///     ...queries take `&tx` where they take a Database...
 ///     try tx.commit();
 ///
-/// At the top level it is `BEGIN IMMEDIATE`: the writer slot is taken before
-/// the first read, so a transaction that reads first can never fail to
-/// upgrade (SQLITE_BUSY_SNAPSHOT). Begun inside an open transaction it is a
-/// savepoint, so a unit of work can run by itself or inside a larger one.
-/// A helper that must run inside a transaction takes a `Tx` parameter.
+/// `begin` is `BEGIN IMMEDIATE` and only opens a top-level transaction: the
+/// writer slot is taken before the first read, so a transaction that reads
+/// first can never fail to upgrade (SQLITE_BUSY_SNAPSHOT), and after
+/// `commit` the writes are durable and visible to other connections. A
+/// helper that runs inside its caller's transaction takes `tx: *const Tx`
+/// (it can query through it but not commit or end it); one that must stay
+/// atomic within it opens `tx.savepoint()`, whose commit is only a release.
 pub const Tx = struct {
     db: Database,
     nested: bool,
     open: bool = true,
+
+    /// A savepoint inside this transaction: its own `commit`/`end`, undone
+    /// with everything else if the enclosing transaction rolls back.
+    pub fn savepoint(tx: *const Tx) !Tx {
+        assert(tx.open);
+        try tx.db.conn.execNoArgs("SAVEPOINT zigweb_tx");
+        return .{ .db = tx.db, .nested = true };
+    }
 
     pub fn commit(tx: *Tx) !void {
         assert(tx.open);
@@ -89,10 +100,16 @@ pub const Tx = struct {
     }
 };
 
+/// Open a top-level write transaction. Inside an open one this is a
+/// mistake (its commit would not commit): Debug builds panic, others get
+/// `error.TransactionOpen`. Take the caller's `Tx` and use `savepoint`.
 pub fn begin(db: Database) !Tx {
-    const nested = zqlite.c.sqlite3_get_autocommit(db.conn.conn) == 0;
-    try db.conn.execNoArgs(if (nested) "SAVEPOINT zigweb_tx" else "BEGIN IMMEDIATE");
-    return .{ .db = db, .nested = nested };
+    if (zqlite.c.sqlite3_get_autocommit(db.conn.conn) == 0) {
+        if (builtin.mode == .debug) std.debug.panic("db.begin() inside an open transaction: take the caller's Tx and use tx.savepoint()", .{});
+        return error.TransactionOpen;
+    }
+    try db.conn.execNoArgs("BEGIN IMMEDIATE");
+    return .{ .db = db, .nested = false };
 }
 
 /// The connection behind a query's `Database` or `Tx` argument.
