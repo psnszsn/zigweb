@@ -266,3 +266,28 @@ test "beginRead leaves no transaction open when its snapshot read fails" {
     _ = zqlite.c.sqlite3_set_authorizer(db.conn.conn, null, null);
     try t.expect(zqlite.c.sqlite3_get_autocommit(db.conn.conn) != 0);
 }
+
+test "savepoint refuses a transaction SQLite already rolled back" {
+    const db = openTestDb();
+    defer db.close();
+    var qs = db.initQueries(BindingQueries);
+    defer db.deinitQueries(BindingQueries, &qs);
+
+    var tx = try db.begin();
+    defer tx.end();
+    // An interrupted INSERT inside an explicit transaction rolls the whole
+    // transaction back.
+    const interrupt = struct {
+        fn always(_: ?*anyopaque) callconv(.c) c_int {
+            return 1;
+        }
+    };
+    zqlite.c.sqlite3_progress_handler(db.conn.conn, 1, &interrupt.always, null);
+    if (insertRow(&qs, tx.db, 1)) |_| return error.TestUnexpectedResult else |_| {}
+    zqlite.c.sqlite3_progress_handler(db.conn.conn, 0, null, null);
+    try t.expect(zqlite.c.sqlite3_get_autocommit(db.conn.conn) != 0);
+
+    try t.expectError(error.TransactionRolledBack, tx.savepoint());
+    tx.end();
+    try t.expect(zqlite.c.sqlite3_get_autocommit(db.conn.conn) != 0);
+}
