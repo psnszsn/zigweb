@@ -13,6 +13,7 @@ pub const cbor = @import("cbor");
 // Pull each file's `test` blocks into `zig build test` — a plain
 // re-export above isn't enough for the test runner to discover them.
 test {
+    _ = Database.debug_checks;
     _ = Auth;
     _ = Table;
     _ = query_parse;

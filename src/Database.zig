@@ -6,6 +6,7 @@ const zqlite = @import("zqlite");
 const log = std.log.scoped(.db);
 
 pub const tables = @import("Database/tables.zig");
+pub const debug_checks = @import("Database/debug_checks.zig");
 
 conn: zqlite.Conn,
 
@@ -19,6 +20,7 @@ pub fn open(db_path: [:0]const u8) Database {
     errdefer conn.close();
 
     const db: Database = .{ .conn = conn };
+    debug_checks.install(conn);
 
     conn.execNoArgs(
         \\PRAGMA foreign_keys = true;
