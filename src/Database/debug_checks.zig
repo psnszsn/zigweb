@@ -61,10 +61,10 @@ fn installWith(conn: zqlite.Conn, recorder: ?*Recorder) void {
 
 fn onStatement(_: c_uint, ctx: ?*anyopaque, p: ?*anyopaque, x: ?*anyopaque) callconv(.c) c_int {
     const stmt: *c.sqlite3_stmt = @ptrCast(p orelse return 0);
-    // For a statement run by a trigger, X is a "-- trigger" comment; the
-    // statement that fired it was already checked.
-    const text: [*:0]const u8 = @ptrCast(x orelse return 0);
-    if (text[0] == '-' and text[1] == '-') return 0;
+    // X is the statement's own SQL when it starts; a trigger subprogram (or
+    // a statement run from inside another) gets a separate "-- ..." string.
+    // The statement that fired those was already checked.
+    if (x != @as(?*const anyopaque, c.sqlite3_sql(stmt))) return 0;
 
     const cause = writeHazard(stmt) orelse return 0;
     if (ctx) |r| {
@@ -97,23 +97,9 @@ fn onStatement(_: c_uint, ctx: ?*anyopaque, p: ?*anyopaque, x: ?*anyopaque) call
 fn writeHazard(stmt: *c.sqlite3_stmt) ?Cause {
     const db = c.sqlite3_db_handle(stmt).?;
     if (c.sqlite3_txn_state(db, "main") != c.SQLITE_TXN_READ) return null;
-    if (!writes(stmt)) return null;
+    // False for BEGIN IMMEDIATE/EXCLUSIVE too: they take the write lock.
+    if (c.sqlite3_stmt_readonly(stmt) != 0) return null;
     return if (c.sqlite3_get_autocommit(db) != 0) .open_cursor else .deferred_begin;
-}
-
-fn writes(stmt: *c.sqlite3_stmt) bool {
-    if (c.sqlite3_stmt_readonly(stmt) == 0) return true;
-    // Transaction control reports read-only, but BEGIN IMMEDIATE/EXCLUSIVE
-    // takes the write lock on whatever snapshot the connection holds.
-    return beginsWriteTransaction(sqlText(stmt));
-}
-
-fn beginsWriteTransaction(sql: []const u8) bool {
-    var words = std.mem.tokenizeAny(u8, sql, " \t\r\n;");
-    const first = words.next() orelse return false;
-    if (!std.ascii.eqlIgnoreCase(first, "BEGIN")) return false;
-    const second = words.next() orelse return false;
-    return std.ascii.eqlIgnoreCase(second, "IMMEDIATE") or std.ascii.eqlIgnoreCase(second, "EXCLUSIVE");
 }
 
 const IdleViolation = union(enum) {
@@ -163,9 +149,11 @@ test "a write over an open cursor is a hazard" {
 
     const row = (try conn.row("SELECT id FROM a WHERE v = 1", .{})).?;
     try conn.exec("UPDATE a SET v = 10 WHERE id = ?", .{row.int(0)});
+    // SQL that starts with a comment is still the statement's own text.
+    try conn.exec("-- why\nUPDATE a SET v = 11 WHERE id = ?", .{row.int(0)});
     row.deinit();
 
-    try t.expectEqual(1, recorder.count);
+    try t.expectEqual(2, recorder.count);
     try t.expectEqual(Cause.open_cursor, recorder.last.?);
 }
 
@@ -281,12 +269,4 @@ test "install and assertIdle pass on safe use" {
     try conn.exec("UPDATE a SET v = 11 WHERE id = ?", .{id});
     try conn.commit();
     assertIdle(conn);
-}
-
-test "beginsWriteTransaction" {
-    try t.expect(beginsWriteTransaction("BEGIN IMMEDIATE"));
-    try t.expect(beginsWriteTransaction("  begin exclusive transaction;"));
-    try t.expect(!beginsWriteTransaction("BEGIN"));
-    try t.expect(!beginsWriteTransaction("BEGIN DEFERRED"));
-    try t.expect(!beginsWriteTransaction("SELECT 1"));
 }
