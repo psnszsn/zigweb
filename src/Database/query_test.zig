@@ -244,7 +244,8 @@ test "beginRead holds a snapshot and always rolls back" {
     var snapshot = try db.beginRead();
     defer snapshot.end();
     try t.expectEqual(Database.Tx.Kind.read, snapshot.kind);
-    try t.expect(zqlite.c.sqlite3_get_autocommit(db.conn.conn) == 0);
+    // The snapshot is taken at beginRead, before any read of the caller's.
+    try t.expectEqual(zqlite.c.SQLITE_TXN_READ, zqlite.c.sqlite3_txn_state(db.conn.conn, "main"));
     const row = qs.select_row.run(@src(), snapshot.db, .{1}).?;
     row.deinit();
     snapshot.end();

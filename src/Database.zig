@@ -64,7 +64,7 @@ pub fn fatal(db: Database, src: std.builtin.SourceLocation) noreturn {
 /// `begin` is `BEGIN IMMEDIATE` and only opens a top-level transaction: the
 /// writer slot is taken before the first read, so a transaction that reads
 /// first can never fail to upgrade (SQLITE_BUSY_SNAPSHOT), and after
-/// `commit` the writes are durable and visible to other connections. A
+/// `commit` the writes are committed and visible to other connections. A
 /// helper that runs inside its caller's transaction takes `tx: *const Tx`
 /// (it queries on `tx.db` but cannot commit or end it); one that must stay
 /// atomic within it opens `tx.savepoint()`, whose commit is only a release.
@@ -113,14 +113,17 @@ pub fn begin(db: Database) !Tx {
     return .{ .db = db, .kind = .write };
 }
 
-/// Open a read-only snapshot (a deferred `BEGIN`): every read until `end()`
-/// sees the same committed state, and no writer lock is taken. Not for
-/// writes: one after a read cannot upgrade if another connection committed
-/// meanwhile (SQLITE_BUSY_SNAPSHOT), and Debug builds panic on it. Top
-/// level only, like `begin`.
+/// Open a read-only snapshot: every read until `end()` sees the committed
+/// state as of this call, and no writer lock is taken. Not for writes: one
+/// cannot upgrade if another connection committed meanwhile
+/// (SQLITE_BUSY_SNAPSHOT), and Debug builds panic on any. Top level only,
+/// like `begin`.
 pub fn beginRead(db: Database) !Tx {
     try assertNoTransaction(db, "db.beginRead() inside an open transaction: read through the caller's Tx");
-    try db.conn.execNoArgs("BEGIN");
+    // A deferred BEGIN takes its snapshot at the first read; take it now, so
+    // the snapshot is this moment and a write anywhere in the block is one
+    // over a read snapshot, which the Debug check flags.
+    try db.conn.execNoArgs("BEGIN; SELECT 1 FROM sqlite_schema LIMIT 1");
     return .{ .db = db, .kind = .read };
 }
 
