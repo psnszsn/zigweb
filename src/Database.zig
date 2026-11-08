@@ -80,6 +80,9 @@ pub const Tx = struct {
     /// with everything else if the enclosing transaction rolls back.
     pub fn savepoint(tx: *const Tx) !Tx {
         assert(tx.open and tx.kind != .read);
+        // SQLite rolls a transaction back by itself on some errors (FULL,
+        // IOERR, NOMEM, INTERRUPT); a SAVEPOINT then would open a new one.
+        assert(zqlite.c.sqlite3_get_autocommit(tx.db.conn.conn) == 0);
         try tx.db.conn.execNoArgs("SAVEPOINT zigweb_tx");
         return .{ .db = tx.db, .kind = .savepoint };
     }
