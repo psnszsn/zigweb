@@ -82,7 +82,7 @@ pub const Tx = struct {
         assert(tx.open and tx.kind != .read);
         // SQLite rolls a transaction back by itself on some errors (FULL,
         // IOERR, NOMEM, INTERRUPT); a SAVEPOINT then would open a new one.
-        assert(zqlite.c.sqlite3_get_autocommit(tx.db.conn.conn) == 0);
+        if (zqlite.c.sqlite3_get_autocommit(tx.db.conn.conn) != 0) return error.TransactionRolledBack;
         try tx.db.conn.execNoArgs("SAVEPOINT zigweb_tx");
         return .{ .db = tx.db, .kind = .savepoint };
     }
@@ -111,13 +111,14 @@ pub const Tx = struct {
 /// mistake (its commit would not commit): Debug builds panic, others get
 /// `error.TransactionOpen`. Take the caller's `Tx` and use `savepoint`.
 pub fn begin(db: Database) !Tx {
-    try assertNoTransaction(db, "db.begin() inside an open transaction: take the caller's Tx and use tx.savepoint()");
+    try assertNoTransaction(db, "db.begin() inside an open transaction: take the caller's Tx and use tx.savepoint(), or end the beginRead() snapshot first");
     try db.conn.execNoArgs("BEGIN IMMEDIATE");
     return .{ .db = db, .kind = .write };
 }
 
 /// Open a read-only snapshot: every read until `end()` sees the committed
-/// state as of this call, and no writer lock is taken. Not for writes: one
+/// state as of this call (or as of a read cursor still open on the
+/// connection, whose snapshot it keeps), and no writer lock is taken. Not for writes: one
 /// cannot upgrade if another connection committed meanwhile
 /// (SQLITE_BUSY_SNAPSHOT), and Debug builds panic on any. Top level only,
 /// like `begin`.
