@@ -123,7 +123,9 @@ pub fn beginRead(db: Database) !Tx {
     // A deferred BEGIN takes its snapshot at the first read; take it now, so
     // the snapshot is this moment and a write anywhere in the block is one
     // over a read snapshot, which the Debug check flags.
-    try db.conn.execNoArgs("BEGIN; SELECT 1 FROM sqlite_schema LIMIT 1");
+    try db.conn.execNoArgs("BEGIN");
+    errdefer db.conn.rollback(); // no Tx to end() if the read fails
+    try db.conn.execNoArgs("SELECT 1 FROM sqlite_schema LIMIT 1");
     return .{ .db = db, .kind = .read };
 }
 

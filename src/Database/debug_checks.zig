@@ -87,7 +87,7 @@ fn onStatement(_: c_uint, ctx: ?*anyopaque, p: ?*anyopaque, x: ?*anyopaque) call
         ),
         .deferred_begin => std.debug.panic(
             "write started in a transaction that read first (SQLITE_BUSY_SNAPSHOT under concurrency); " ++
-                "open it with BEGIN IMMEDIATE. Write: {s}",
+                "open it with db.begin() (BEGIN IMMEDIATE), and never write inside db.beginRead(). Write: {s}",
             .{sqlText(stmt)},
         ),
     }

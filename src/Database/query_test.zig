@@ -251,3 +251,18 @@ test "beginRead holds a snapshot and always rolls back" {
     snapshot.end();
     try t.expect(zqlite.c.sqlite3_get_autocommit(db.conn.conn) != 0);
 }
+
+test "beginRead leaves no transaction open when its snapshot read fails" {
+    const db = openTestDb();
+    defer db.close();
+    // Refuse every SELECT: BEGIN succeeds, the snapshot read does not.
+    const deny = struct {
+        fn select(_: ?*anyopaque, action: c_int, _: [*c]const u8, _: [*c]const u8, _: [*c]const u8, _: [*c]const u8) callconv(.c) c_int {
+            return if (action == zqlite.c.SQLITE_SELECT) zqlite.c.SQLITE_DENY else zqlite.c.SQLITE_OK;
+        }
+    };
+    _ = zqlite.c.sqlite3_set_authorizer(db.conn.conn, &deny.select, null);
+    if (db.beginRead()) |_| return error.TestUnexpectedResult else |_| {}
+    _ = zqlite.c.sqlite3_set_authorizer(db.conn.conn, null, null);
+    try t.expect(zqlite.c.sqlite3_get_autocommit(db.conn.conn) != 0);
+}
