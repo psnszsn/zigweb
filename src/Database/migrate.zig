@@ -120,8 +120,11 @@ pub fn migrateSchema(comptime Tables: type, gpa: Allocator, conn: zqlite.Conn) !
         conn.execNoArgs("PRAGMA foreign_keys=OFF") catch return error.MigrateFailed;
         defer conn.execNoArgs("PRAGMA foreign_keys=ON") catch {};
 
-        // Step 2: Start a transaction
-        try conn.transaction();
+        // Step 2: Start a transaction. IMMEDIATE: step 3 reads the schema
+        // before anything is written, and a deferred transaction could not
+        // then upgrade if another connection (another binary sharing the
+        // file) committed in between (SQLITE_BUSY_SNAPSHOT).
+        conn.execNoArgs("BEGIN IMMEDIATE") catch return error.MigrateFailed;
         {
             errdefer conn.rollback();
 

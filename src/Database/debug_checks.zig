@@ -22,7 +22,7 @@ const c = zqlite.c;
 
 const log = std.log.scoped(.db_debug);
 
-const enabled = builtin.mode == .Debug;
+const enabled = builtin.mode == .debug;
 
 /// Panic whenever a write starts on a read snapshot. Call once per
 /// connection, right after opening it.
@@ -265,6 +265,22 @@ test "idleViolation sees an open transaction and an open cursor" {
     while (rows.next()) |_| {}
     try t.expectEqual(null, idleViolation(conn.conn));
     rows.deinit();
+}
+
+test "install and assertIdle pass on safe use" {
+    var unused: Recorder = .{};
+    const conn = try testConn(&unused);
+    defer conn.close();
+    install(conn); // the panicking hook replaces the recorder
+
+    const row = (try conn.row("SELECT id FROM a WHERE v = 1", .{})).?;
+    const id = row.int(0);
+    row.deinit();
+    try conn.exec("UPDATE a SET v = 10 WHERE id = ?", .{id});
+    try conn.execNoArgs("BEGIN IMMEDIATE");
+    try conn.exec("UPDATE a SET v = 11 WHERE id = ?", .{id});
+    try conn.commit();
+    assertIdle(conn);
 }
 
 test "beginsWriteTransaction" {
