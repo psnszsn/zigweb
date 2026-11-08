@@ -58,7 +58,7 @@ pub fn fatal(db: Database, src: std.builtin.SourceLocation) noreturn {
 ///
 ///     var tx = try db.begin();
 ///     defer tx.end(); // rolls back unless committed
-///     ...queries take `&tx` where they take a Database...
+///     ...queries run on `tx.db`...
 ///     try tx.commit();
 ///
 /// `begin` is `BEGIN IMMEDIATE` and only opens a top-level transaction: the
@@ -66,7 +66,7 @@ pub fn fatal(db: Database, src: std.builtin.SourceLocation) noreturn {
 /// first can never fail to upgrade (SQLITE_BUSY_SNAPSHOT), and after
 /// `commit` the writes are durable and visible to other connections. A
 /// helper that runs inside its caller's transaction takes `tx: *const Tx`
-/// (it can query through it but not commit or end it); one that must stay
+/// (it queries on `tx.db` but cannot commit or end it); one that must stay
 /// atomic within it opens `tx.savepoint()`, whose commit is only a release.
 pub const Tx = struct {
     db: Database,
@@ -110,16 +110,6 @@ pub fn begin(db: Database) !Tx {
     }
     try db.conn.execNoArgs("BEGIN IMMEDIATE");
     return .{ .db = db, .nested = false };
-}
-
-/// The connection behind a query's `Database` or `Tx` argument.
-fn handleDb(handle: anytype) Database {
-    return switch (@TypeOf(handle)) {
-        Database => handle,
-        Tx, *Tx, *const Tx => handle.db,
-        // An anonymous `.{ .conn = conn }`, which coerced to Database before.
-        else => .{ .conn = handle.conn },
-    };
 }
 
 /// Initializes a "Queries" type.
@@ -192,15 +182,13 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
         pub fn runReturning(
             q: *const @This(),
             src: std.builtin.SourceLocation,
-            handle: anytype, // Database or Tx
+            db: Database,
             comptime col: std.meta.FieldEnum(config.cols),
             args: config.args,
         ) ColType(col) {
             if (config.kind != .returning) {
                 @compileError("only to be used by .returning queries, use .run() instead");
             }
-            const db = handleDb(handle);
-
             const stmt: zqlite.Stmt = .{
                 .conn = db.conn.conn,
                 .stmt = @ptrCast(q.stmt),
@@ -222,10 +210,9 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
         pub fn run(
             q: *const @This(),
             src: std.builtin.SourceLocation,
-            handle: anytype, // Database or Tx
+            db: Database,
             args: config.args,
         ) Result(config) {
-            const db = handleDb(handle);
             const stmt: zqlite.Stmt = .{
                 .conn = db.conn.conn,
                 .stmt = @ptrCast(q.stmt),
@@ -267,7 +254,7 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
                         std.debug.panic("positional ? SQL parameters require tuple args", .{});
                     }
                     inline for (@typeInfo(config.args).@"struct".field_names, 0..) |name, idx| {
-                        bindArgValue(stmt, db, @field(args, name), idx);
+                        bindField(stmt, db, args, name, idx);
                     }
                 },
                 .named => {
@@ -276,7 +263,7 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
                     }
                     validateNamedParameters(stmt, config.args);
                     inline for (@typeInfo(config.args).@"struct".field_names) |name| {
-                        const bound = bindNamedArg(stmt, db, name, @field(args, name));
+                        const bound = bindNamedArg(stmt, db, args, name);
                         if (bound == 0) {
                             std.debug.panic("named SQL parameter :{s} has no matching placeholder in query", .{name});
                         }
@@ -352,7 +339,7 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
             return false;
         }
 
-        fn bindNamedArg(stmt: zqlite.Stmt, db: Database, comptime field_name: []const u8, value: anytype) usize {
+        fn bindNamedArg(stmt: zqlite.Stmt, db: Database, args: config.args, comptime field_name: []const u8) usize {
             var parameter_name: [field_name.len + 2]u8 = undefined;
             parameter_name[0] = ':';
             @memcpy(parameter_name[1 .. 1 + field_name.len], field_name);
@@ -364,44 +351,41 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
             while (i <= count) : (i += 1) {
                 const name_z = zqlite.c.sqlite3_bind_parameter_name(sqliteStmtPtr(stmt), i) orelse continue;
                 if (std.mem.eql(u8, std.mem.span(name_z), parameter_name[0 .. parameter_name.len - 1])) {
-                    bindArgValueAt(stmt, db, value, i);
+                    bindField(stmt, db, args, field_name, @intCast(i - 1));
                     bound += 1;
                 }
             }
             return bound;
         }
 
-        fn bindArgValue(stmt: zqlite.Stmt, db: Database, value: anytype, index: usize) void {
-            bindArgValueAt(stmt, db, value, @intCast(index + 1));
+        /// Bind `args.<name>` to the 0-based parameter `index`.
+        fn bindField(stmt: zqlite.Stmt, db: Database, args: config.args, comptime name: []const u8, index: usize) void {
+            bindValue(@FieldType(config.args, name), stmt, db, @field(args, name), index);
         }
 
-        fn bindArgValueAt(stmt: zqlite.Stmt, db: Database, value: anytype, bind_index: c_int) void {
-            bindValueAs(@TypeOf(value), stmt, db, value, bind_index);
-        }
-
-        fn bindValueAs(comptime T: type, stmt: zqlite.Stmt, db: Database, value: T, bind_index: c_int) void {
+        fn bindValue(comptime T: type, stmt: zqlite.Stmt, db: Database, value: T, index: usize) void {
             switch (@typeInfo(T)) {
-                .@"enum" => stmt.bindValue(@intFromEnum(value), @intCast(bind_index - 1)) catch db.fatal(@src()),
+                .@"enum" => stmt.bindValue(@intFromEnum(value), index) catch db.fatal(@src()),
                 .optional => |opt| switch (@typeInfo(opt.child)) {
                     .@"enum" => {
                         if (value) |v| {
-                            stmt.bindValue(@intFromEnum(v), @intCast(bind_index - 1)) catch db.fatal(@src());
+                            stmt.bindValue(@intFromEnum(v), index) catch db.fatal(@src());
                         } else {
-                            stmt.bindValue(null, @intCast(bind_index - 1)) catch db.fatal(@src());
+                            stmt.bindValue(null, index) catch db.fatal(@src());
                         }
                     },
-                    else => stmt.bindValue(value, @intCast(bind_index - 1)) catch db.fatal(@src()),
+                    else => stmt.bindValue(value, index) catch db.fatal(@src()),
                 },
                 .@"struct" => |info| {
                     if (info.layout != .@"packed" or info.backing_integer == null) {
-                        stmt.bindValue(value, @intCast(bind_index - 1)) catch db.fatal(@src());
+                        stmt.bindValue(value, index) catch db.fatal(@src());
                         return;
                     }
                     const Int = info.backing_integer.?;
                     const int_value: Int = @bitCast(value);
-                    stmt.bindValue(int_value, @intCast(bind_index - 1)) catch db.fatal(@src());
+                    stmt.bindValue(int_value, index) catch db.fatal(@src());
                 },
-                else => stmt.bindValue(value, @intCast(bind_index - 1)) catch db.fatal(@src()),
+                else => stmt.bindValue(value, index) catch db.fatal(@src()),
             }
         }
     };

@@ -156,8 +156,8 @@ fn countRows(db: Database) i64 {
     return row.int(0);
 }
 
-fn insertRow(qs: *const BindingQueries, handle: anytype, id: i64) !void {
-    try qs.insert_positional.run(@src(), handle, .{ id, .vanilla, null, .{ .admin = false, .editor = false }, 0, 0, 0 });
+fn insertRow(qs: *const BindingQueries, db: Database, id: i64) !void {
+    try qs.insert_positional.run(@src(), db, .{ id, .vanilla, null, .{ .admin = false, .editor = false }, 0, 0, 0 });
 }
 
 test "Tx commits, and rolls back when it ends uncommitted" {
@@ -170,13 +170,13 @@ test "Tx commits, and rolls back when it ends uncommitted" {
         var tx = try db.begin();
         defer tx.end();
         try t.expect(!tx.nested);
-        try insertRow(&qs, &tx, 1);
+        try insertRow(&qs, tx.db, 1);
         try tx.commit();
     }
     {
         var tx = try db.begin();
         defer tx.end();
-        try insertRow(&qs, tx, 2);
+        try insertRow(&qs, tx.db, 2);
     }
     try t.expectEqual(@as(i64, 1), countRows(db));
     try t.expect(zqlite.c.sqlite3_get_autocommit(db.conn.conn) != 0);
@@ -192,7 +192,7 @@ test "Tx rolls back on an early error return" {
         fn run(d: Database, q: *const BindingQueries) !void {
             var tx = try d.begin();
             defer tx.end();
-            try insertRow(q, &tx, 1);
+            try insertRow(q, tx.db, 1);
             return error.Refused;
         }
     };
@@ -210,12 +210,12 @@ test "Tx savepoints commit and roll back inside the enclosing transaction" {
     {
         var outer = try db.begin();
         defer outer.end();
-        try insertRow(&qs, &outer, 1);
+        try insertRow(&qs, outer.db, 1);
         {
             var inner = try outer.savepoint();
             defer inner.end();
             try t.expect(inner.nested);
-            try insertRow(&qs, &inner, 2);
+            try insertRow(&qs, inner.db, 2);
         }
         try outer.commit();
     }
@@ -227,7 +227,7 @@ test "Tx savepoints commit and roll back inside the enclosing transaction" {
         defer outer.end();
         var inner = try outer.savepoint();
         defer inner.end();
-        try insertRow(&qs, &inner, 3);
+        try insertRow(&qs, inner.db, 3);
         try inner.commit();
     }
     try t.expectEqual(@as(i64, 1), countRows(db));
