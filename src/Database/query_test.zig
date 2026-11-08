@@ -149,3 +149,87 @@ test "Query named :args bind by field and reuse repeated parameters" {
     try t.expectEqual(@as(?u64, 77), row.get(.hi));
     try t.expectEqual(@as(?f64, 3.25), row.get(.score));
 }
+
+fn countRows(db: Database) i64 {
+    const row = (db.conn.row("SELECT count(*) FROM binding_test", .{}) catch unreachable).?;
+    defer row.deinit();
+    return row.int(0);
+}
+
+fn insertRow(qs: *const BindingQueries, handle: anytype, id: i64) !void {
+    try qs.insert_positional.run(@src(), handle, .{ id, .vanilla, null, .{ .admin = false, .editor = false }, 0, 0, 0 });
+}
+
+test "Tx commits, and rolls back when it ends uncommitted" {
+    const db = openTestDb();
+    defer db.close();
+    var qs = db.initQueries(BindingQueries);
+    defer db.deinitQueries(BindingQueries, &qs);
+
+    {
+        var tx = try db.begin();
+        defer tx.end();
+        try t.expect(!tx.nested);
+        try insertRow(&qs, &tx, 1);
+        try tx.commit();
+    }
+    {
+        var tx = try db.begin();
+        defer tx.end();
+        try insertRow(&qs, tx, 2);
+    }
+    try t.expectEqual(@as(i64, 1), countRows(db));
+    try t.expect(zqlite.c.sqlite3_get_autocommit(db.conn.conn) != 0);
+}
+
+test "Tx rolls back on an early error return" {
+    const db = openTestDb();
+    defer db.close();
+    var qs = db.initQueries(BindingQueries);
+    defer db.deinitQueries(BindingQueries, &qs);
+
+    const unit = struct {
+        fn run(d: Database, q: *const BindingQueries) !void {
+            var tx = try d.begin();
+            defer tx.end();
+            try insertRow(q, &tx, 1);
+            return error.Refused;
+        }
+    };
+    try t.expectError(error.Refused, unit.run(db, &qs));
+    try t.expectEqual(@as(i64, 0), countRows(db));
+}
+
+test "Tx nested inside another is a savepoint" {
+    const db = openTestDb();
+    defer db.close();
+    var qs = db.initQueries(BindingQueries);
+    defer db.deinitQueries(BindingQueries, &qs);
+
+    // Inner rolled back, outer committed: only the outer row stays.
+    {
+        var outer = try db.begin();
+        defer outer.end();
+        try insertRow(&qs, &outer, 1);
+        {
+            var inner = try db.begin();
+            defer inner.end();
+            try t.expect(inner.nested);
+            try insertRow(&qs, &inner, 2);
+        }
+        try outer.commit();
+    }
+    try t.expectEqual(@as(i64, 1), countRows(db));
+
+    // Inner committed, outer rolled back: nothing stays.
+    {
+        var outer = try db.begin();
+        defer outer.end();
+        var inner = try db.begin();
+        try insertRow(&qs, &inner, 3);
+        try inner.commit();
+        inner.end();
+    }
+    try t.expectEqual(@as(i64, 1), countRows(db));
+    try t.expect(zqlite.c.sqlite3_get_autocommit(db.conn.conn) != 0);
+}

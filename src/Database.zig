@@ -53,6 +53,58 @@ pub fn fatal(db: Database, src: std.builtin.SourceLocation) noreturn {
     std.debug.panic("{s}:{}: fatal db error: {s}", .{ src.file, src.line, db.conn.lastError() });
 }
 
+/// A write transaction, opened by `begin`:
+///
+///     var tx = try db.begin();
+///     defer tx.end(); // rolls back unless committed
+///     ...queries take `tx` where they take a Database...
+///     try tx.commit();
+///
+/// At the top level it is `BEGIN IMMEDIATE`: the writer slot is taken before
+/// the first read, so a transaction that reads first can never fail to
+/// upgrade (SQLITE_BUSY_SNAPSHOT). Begun inside an open transaction it is a
+/// savepoint, so a unit of work can run by itself or inside a larger one.
+/// A helper that must run inside a transaction takes a `Tx` parameter.
+pub const Tx = struct {
+    db: Database,
+    nested: bool,
+    open: bool = true,
+
+    pub fn commit(tx: *Tx) !void {
+        assert(tx.open);
+        if (tx.nested) try tx.db.conn.execNoArgs("RELEASE zigweb_tx") else try tx.db.conn.commit();
+        tx.open = false;
+    }
+
+    /// Roll back unless `commit` succeeded. Meant for `defer`.
+    pub fn end(tx: *Tx) void {
+        if (!tx.open) return;
+        tx.open = false;
+        if (tx.nested) {
+            tx.db.conn.execNoArgs("ROLLBACK TO zigweb_tx") catch {};
+            tx.db.conn.execNoArgs("RELEASE zigweb_tx") catch {};
+        } else {
+            tx.db.conn.rollback();
+        }
+    }
+};
+
+pub fn begin(db: Database) !Tx {
+    const nested = zqlite.c.sqlite3_get_autocommit(db.conn.conn) == 0;
+    try db.conn.execNoArgs(if (nested) "SAVEPOINT zigweb_tx" else "BEGIN IMMEDIATE");
+    return .{ .db = db, .nested = nested };
+}
+
+/// The connection behind a query's `Database` or `Tx` argument.
+fn handleDb(handle: anytype) Database {
+    return switch (@TypeOf(handle)) {
+        Database => handle,
+        Tx, *Tx, *const Tx => handle.db,
+        // An anonymous `.{ .conn = conn }`, which coerced to Database before.
+        else => .{ .conn = handle.conn },
+    };
+}
+
 /// Initializes a "Queries" type.
 /// A Queries type is a struct whose fields are all of type Query.
 /// Queries should be deinited when disconnecting from the database.
@@ -123,13 +175,14 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
         pub fn runReturning(
             q: *const @This(),
             src: std.builtin.SourceLocation,
-            db: Database,
+            handle: anytype, // Database or Tx
             comptime col: std.meta.FieldEnum(config.cols),
             args: config.args,
         ) ColType(col) {
             if (config.kind != .returning) {
                 @compileError("only to be used by .returning queries, use .run() instead");
             }
+            const db = handleDb(handle);
 
             const stmt: zqlite.Stmt = .{
                 .conn = db.conn.conn,
@@ -152,9 +205,10 @@ pub fn Query(sql_query: [:0]const u8, config: QueryConfig) type {
         pub fn run(
             q: *const @This(),
             src: std.builtin.SourceLocation,
-            db: Database,
+            handle: anytype, // Database or Tx
             args: config.args,
         ) Result(config) {
+            const db = handleDb(handle);
             const stmt: zqlite.Stmt = .{
                 .conn = db.conn.conn,
                 .stmt = @ptrCast(q.stmt),
