@@ -15,7 +15,7 @@ pub const Table = struct {
 /// The module should re-export base tables (credentials, sessions) and
 /// define its own app-specific tables.
 pub fn initTables(comptime Tables: type, conn: zqlite.Conn) !void {
-    try conn.transaction();
+    try conn.execNoArgs("BEGIN IMMEDIATE");
     errdefer conn.rollback();
 
     inline for (comptime std.meta.declarations(Tables)) |decl_name| {

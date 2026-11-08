@@ -169,7 +169,7 @@ test "Tx commits, and rolls back when it ends uncommitted" {
     {
         var tx = try db.begin();
         defer tx.end();
-        try t.expect(!tx.nested);
+        try t.expectEqual(Database.Tx.Kind.write, tx.kind);
         try insertRow(&qs, tx.db, 1);
         try tx.commit();
     }
@@ -214,7 +214,7 @@ test "Tx savepoints commit and roll back inside the enclosing transaction" {
         {
             var inner = try outer.savepoint();
             defer inner.end();
-            try t.expect(inner.nested);
+            try t.expectEqual(Database.Tx.Kind.savepoint, inner.kind);
             try insertRow(&qs, inner.db, 2);
         }
         try outer.commit();
@@ -231,5 +231,22 @@ test "Tx savepoints commit and roll back inside the enclosing transaction" {
         try inner.commit();
     }
     try t.expectEqual(@as(i64, 1), countRows(db));
+    try t.expect(zqlite.c.sqlite3_get_autocommit(db.conn.conn) != 0);
+}
+
+test "beginRead holds a snapshot and always rolls back" {
+    const db = openTestDb();
+    defer db.close();
+    var qs = db.initQueries(BindingQueries);
+    defer db.deinitQueries(BindingQueries, &qs);
+    try insertRow(&qs, db, 1);
+
+    var snapshot = try db.beginRead();
+    defer snapshot.end();
+    try t.expectEqual(Database.Tx.Kind.read, snapshot.kind);
+    try t.expect(zqlite.c.sqlite3_get_autocommit(db.conn.conn) == 0);
+    const row = qs.select_row.run(@src(), snapshot.db, .{1}).?;
+    row.deinit();
+    snapshot.end();
     try t.expect(zqlite.c.sqlite3_get_autocommit(db.conn.conn) != 0);
 }

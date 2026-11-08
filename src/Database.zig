@@ -68,22 +68,25 @@ pub fn fatal(db: Database, src: std.builtin.SourceLocation) noreturn {
 /// helper that runs inside its caller's transaction takes `tx: *const Tx`
 /// (it queries on `tx.db` but cannot commit or end it); one that must stay
 /// atomic within it opens `tx.savepoint()`, whose commit is only a release.
+/// `beginRead` opens a read-only snapshot instead.
 pub const Tx = struct {
     db: Database,
-    nested: bool,
+    kind: Kind,
     open: bool = true,
+
+    pub const Kind = enum { write, savepoint, read };
 
     /// A savepoint inside this transaction: its own `commit`/`end`, undone
     /// with everything else if the enclosing transaction rolls back.
     pub fn savepoint(tx: *const Tx) !Tx {
-        assert(tx.open);
+        assert(tx.open and tx.kind != .read);
         try tx.db.conn.execNoArgs("SAVEPOINT zigweb_tx");
-        return .{ .db = tx.db, .nested = true };
+        return .{ .db = tx.db, .kind = .savepoint };
     }
 
     pub fn commit(tx: *Tx) !void {
-        assert(tx.open);
-        if (tx.nested) try tx.db.conn.execNoArgs("RELEASE zigweb_tx") else try tx.db.conn.commit();
+        assert(tx.open and tx.kind != .read); // a snapshot has nothing to commit: end() it
+        if (tx.kind == .savepoint) try tx.db.conn.execNoArgs("RELEASE zigweb_tx") else try tx.db.conn.commit();
         tx.open = false;
     }
 
@@ -91,11 +94,12 @@ pub const Tx = struct {
     pub fn end(tx: *Tx) void {
         if (!tx.open) return;
         tx.open = false;
-        if (tx.nested) {
-            tx.db.conn.execNoArgs("ROLLBACK TO zigweb_tx") catch {};
-            tx.db.conn.execNoArgs("RELEASE zigweb_tx") catch {};
-        } else {
-            tx.db.conn.rollback();
+        switch (tx.kind) {
+            .write, .read => tx.db.conn.rollback(),
+            .savepoint => {
+                tx.db.conn.execNoArgs("ROLLBACK TO zigweb_tx") catch {};
+                tx.db.conn.execNoArgs("RELEASE zigweb_tx") catch {};
+            },
         }
     }
 };
@@ -104,12 +108,26 @@ pub const Tx = struct {
 /// mistake (its commit would not commit): Debug builds panic, others get
 /// `error.TransactionOpen`. Take the caller's `Tx` and use `savepoint`.
 pub fn begin(db: Database) !Tx {
-    if (zqlite.c.sqlite3_get_autocommit(db.conn.conn) == 0) {
-        if (builtin.mode == .debug) std.debug.panic("db.begin() inside an open transaction: take the caller's Tx and use tx.savepoint()", .{});
-        return error.TransactionOpen;
-    }
+    try assertNoTransaction(db, "db.begin() inside an open transaction: take the caller's Tx and use tx.savepoint()");
     try db.conn.execNoArgs("BEGIN IMMEDIATE");
-    return .{ .db = db, .nested = false };
+    return .{ .db = db, .kind = .write };
+}
+
+/// Open a read-only snapshot (a deferred `BEGIN`): every read until `end()`
+/// sees the same committed state, and no writer lock is taken. Not for
+/// writes: one after a read cannot upgrade if another connection committed
+/// meanwhile (SQLITE_BUSY_SNAPSHOT), and Debug builds panic on it. Top
+/// level only, like `begin`.
+pub fn beginRead(db: Database) !Tx {
+    try assertNoTransaction(db, "db.beginRead() inside an open transaction: read through the caller's Tx");
+    try db.conn.execNoArgs("BEGIN");
+    return .{ .db = db, .kind = .read };
+}
+
+fn assertNoTransaction(db: Database, comptime message: []const u8) !void {
+    if (zqlite.c.sqlite3_get_autocommit(db.conn.conn) != 0) return;
+    if (builtin.mode == .debug) std.debug.panic(message, .{});
+    return error.TransactionOpen;
 }
 
 /// Initializes a "Queries" type.
